@@ -1,0 +1,124 @@
+import Link from "next/link"
+import {
+  Activity,
+  CalendarDays,
+  DollarSign,
+  LineChart,
+  Percent,
+  Scale,
+  TrendingUp,
+  Upload,
+} from "lucide-react"
+import { PageHeader } from "@/components/page-header"
+import { MetricCard } from "@/components/metric-card"
+import { ChartCard } from "@/components/chart-card"
+import { EmptyState } from "@/components/empty-state"
+import { Button } from "@/components/ui/button"
+import { EquityCurve } from "@/components/charts/equity-curve"
+import { PnlCalendar } from "@/components/charts/pnl-calendar"
+import {
+  getDailyPnl,
+  getPerformanceSummary,
+  getTrades,
+} from "@/lib/data"
+import { formatCurrency, formatPercent } from "@/lib/utils"
+
+export default function DashboardPage() {
+  const summary = getPerformanceSummary()
+  const daily = getDailyPnl()
+  const trades = getTrades()
+  const hasData = trades.length > 0
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Dashboard"
+        description="Your trading performance at a glance."
+        actions={
+          <Button asChild>
+            <Link href="/import">
+              <Upload className="h-4 w-4" />
+              Import trades
+            </Link>
+          </Button>
+        }
+      />
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <MetricCard
+          label="Net P&L"
+          value={formatCurrency(summary.netPnl, { signed: true })}
+          icon={DollarSign}
+          tone={summary.netPnl === 0 ? "default" : summary.netPnl > 0 ? "positive" : "negative"}
+        />
+        <MetricCard
+          label="Win rate"
+          value={summary.winRate === null ? "—" : formatPercent(summary.winRate)}
+          icon={Percent}
+        />
+        <MetricCard
+          label="Profit factor"
+          value={summary.profitFactor === null ? "—" : summary.profitFactor.toFixed(2)}
+          icon={Scale}
+        />
+        <MetricCard
+          label="Account balance"
+          value={formatCurrency(summary.accountBalance)}
+          icon={TrendingUp}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <MetricCard
+          label="Total trades"
+          value={String(summary.tradeCount)}
+          icon={Activity}
+        />
+        <MetricCard
+          label="Avg win"
+          value={formatCurrency(summary.averageWin)}
+          tone={summary.averageWin > 0 ? "positive" : "default"}
+        />
+        <MetricCard
+          label="Avg loss"
+          value={formatCurrency(summary.averageLoss)}
+          tone={summary.averageLoss < 0 ? "negative" : "default"}
+        />
+        <MetricCard
+          label="Expectancy"
+          value={summary.expectancy === null ? "—" : formatCurrency(summary.expectancy, { signed: true })}
+        />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ChartCard
+          title="Equity curve"
+          description="Cumulative account balance over time"
+          className="lg:col-span-2"
+        >
+          {hasData ? (
+            <EquityCurve data={daily} startingBalance={summary.accountBalance} />
+          ) : (
+            <EmptyState
+              icon={LineChart}
+              title="No equity data yet"
+              description="Once you log or import trades, your equity curve will build here."
+            />
+          )}
+        </ChartCard>
+
+        <ChartCard title="P&L calendar" description="Daily results this month">
+          {hasData ? (
+            <PnlCalendar data={daily} />
+          ) : (
+            <EmptyState
+              icon={CalendarDays}
+              title="Nothing logged"
+              description="Your daily wins and losses will appear on this calendar."
+            />
+          )}
+        </ChartCard>
+      </div>
+    </div>
+  )
+}
