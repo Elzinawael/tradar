@@ -20,15 +20,20 @@ alter table public.backtest_sessions     enable row level security;
 alter table public.progress_rules        enable row level security;
 alter table public.progress_completions  enable row level security;
 
-alter table public.profiles              force row level security;
-alter table public.trading_accounts      force row level security;
-alter table public.strategies            force row level security;
-alter table public.trades                force row level security;
-alter table public.executions            force row level security;
-alter table public.journal_entries       force row level security;
-alter table public.backtest_sessions     force row level security;
-alter table public.progress_rules        force row level security;
-alter table public.progress_completions  force row level security;
+-- NOTE: FORCE ROW LEVEL SECURITY is deliberately NOT used.
+--
+-- FORCE subjects the table OWNER to RLS as well. `handle_new_user()` below is
+-- SECURITY DEFINER and runs as the owner to provision a new user's profile,
+-- default trading account and discipline rules. Under FORCE, those inserts are
+-- rejected ("new row violates row-level security policy") unless the owning
+-- role happens to hold BYPASSRLS — so signup would fail outright on any
+-- project where it does not. This was reproduced against PostgreSQL 16.
+--
+-- Omitting FORCE does not weaken user isolation: `anon` and `authenticated`
+-- are the only roles the application ever connects as through PostgREST, and
+-- both remain fully constrained by the policies below. This is verified in
+-- supabase/tests/01_smoke.sql, which asserts that a signed-in user cannot
+-- read, update or delete another user's rows and that `anon` sees nothing.
 
 -- ---------------------------------------------------------------------------
 -- profiles — keyed on id rather than user_id
@@ -98,6 +103,47 @@ begin
     );
   end loop;
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- Table privileges
+--
+-- RLS decides WHICH ROWS a role may touch; it does not grant access to the
+-- table in the first place. Supabase normally supplies these grants through
+-- default privileges configured for the `postgres` role, but that is implicit
+-- and depends on which role runs the migration — if the tables end up owned by
+-- another role, PostgREST fails with "permission denied for table" even though
+-- the policies are correct. Granting explicitly makes the schema
+-- self-contained and idempotent.
+--
+-- `authenticated` gets full DML; every statement is still filtered by the
+-- policies above. `anon` gets SELECT only, and since no policy targets the
+-- anon role it resolves to zero rows — verified in supabase/tests/01_smoke.sql.
+-- ---------------------------------------------------------------------------
+grant usage on schema public to anon, authenticated, service_role;
+
+grant select, insert, update, delete on
+  public.profiles,
+  public.trading_accounts,
+  public.strategies,
+  public.trades,
+  public.executions,
+  public.journal_entries,
+  public.backtest_sessions,
+  public.progress_rules,
+  public.progress_completions
+to authenticated;
+
+grant select on
+  public.profiles,
+  public.trading_accounts,
+  public.strategies,
+  public.trades,
+  public.executions,
+  public.journal_entries,
+  public.backtest_sessions,
+  public.progress_rules,
+  public.progress_completions
+to anon;
 
 -- ---------------------------------------------------------------------------
 -- Referential guards
