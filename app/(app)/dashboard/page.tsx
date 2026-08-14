@@ -16,29 +16,40 @@ import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
 import { EquityCurve } from "@/components/charts/equity-curve"
 import { PnlCalendar } from "@/components/charts/pnl-calendar"
-import { getAccounts, getDailyPnl, getPerformanceSummary } from "@/lib/data"
+import {
+  getAccounts,
+  getDailyPnl,
+  getPerformanceSummary,
+  startingBalanceFor,
+} from "@/lib/data"
+import { resolveRangeParam } from "@/lib/date-range"
 import { formatCurrency, formatPercent } from "@/lib/utils"
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ range?: string; accountId?: string }>
+}) {
+  const { range, accountId } = await searchParams
+  const resolved = resolveRangeParam(range)
+  const scope = { accountId, from: resolved.from, to: resolved.to }
+
   const [summary, daily, accounts] = await Promise.all([
-    getPerformanceSummary(),
-    getDailyPnl(),
+    getPerformanceSummary(scope),
+    getDailyPnl(scope),
     getAccounts(),
   ])
   const hasData = daily.length > 0
 
   // Seed the equity curve with the account's OPENING balance. Using the
   // current balance here would double-count realised P&L.
-  const startingBalance = accounts.reduce(
-    (sum, account) => sum + account.startingBalance,
-    0,
-  )
+  const startingBalance = startingBalanceFor(accounts, accountId)
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Dashboard"
-        description="Your trading performance at a glance."
+        description={`Your trading performance at a glance · ${resolved.label}`}
         actions={
           <Button asChild>
             <Link href="/import">

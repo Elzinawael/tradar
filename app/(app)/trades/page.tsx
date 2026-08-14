@@ -1,3 +1,4 @@
+import { Suspense } from "react"
 import Link from "next/link"
 import type { Metadata } from "next"
 import { Plus } from "lucide-react"
@@ -89,7 +90,9 @@ export default async function TradesPage({
         }
       />
 
-      <TradeFilters accounts={accounts} strategies={strategies} />
+      <Suspense fallback={<div className="h-9" />}>
+        <TradeFilters accounts={accounts} strategies={strategies} />
+      </Suspense>
 
       <Card className="p-0">
         <TradeTable

@@ -22,3 +22,23 @@ export const initialTradeState: TradeActionState = {
   error: null,
   fieldErrors: {},
 }
+
+export interface JournalActionState {
+  error: string | null
+  fieldErrors: Record<string, string>
+}
+
+export const initialJournalState: JournalActionState = {
+  error: null,
+  fieldErrors: {},
+}
+
+export interface StrategyActionState {
+  error: string | null
+  fieldErrors: Record<string, string>
+}
+
+export const initialStrategyState: StrategyActionState = {
+  error: null,
+  fieldErrors: {},
+}

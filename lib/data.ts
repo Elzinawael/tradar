@@ -149,12 +149,26 @@ export async function getAccounts(): Promise<TradingAccount[]> {
   return (data as Row[]).map(mapAccount)
 }
 
+/** Scope shared by every analytics accessor. */
+export interface AnalyticsScope {
+  /** Restrict to one trading account. */
+  accountId?: string
+  /** Inclusive ISO lower bound on opened_at. */
+  from?: string
+  /** Inclusive ISO upper bound on opened_at. */
+  to?: string
+}
+
 /**
  * All trades for the current user, newest first.
  *
- * @param accountId restrict to a single trading account
+ * Accepts either an account id (legacy call sites) or a full scope object.
  */
-export async function getTrades(accountId?: string): Promise<Trade[]> {
+export async function getTrades(
+  scope: string | AnalyticsScope = {},
+): Promise<Trade[]> {
+  const s: AnalyticsScope = typeof scope === "string" ? { accountId: scope } : scope
+
   const supabase = await createClient()
   if (!supabase) return []
 
@@ -165,7 +179,9 @@ export async function getTrades(accountId?: string): Promise<Trade[]> {
     )
     .order("opened_at", { ascending: false })
 
-  if (accountId) query = query.eq("account_id", accountId)
+  if (s.accountId) query = query.eq("account_id", s.accountId)
+  if (s.from) query = query.gte("opened_at", s.from)
+  if (s.to) query = query.lte("opened_at", s.to)
 
   const { data, error } = await query
   if (error || !data) return []
@@ -174,29 +190,33 @@ export async function getTrades(accountId?: string): Promise<Trade[]> {
 
 /** Aggregate performance metrics computed from the user's closed trades. */
 export async function getPerformanceSummary(
-  accountId?: string,
+  scope: string | AnalyticsScope = {},
 ): Promise<PerformanceSummary> {
-  const [trades, accounts] = await Promise.all([
-    getTrades(accountId),
-    getAccounts(),
-  ])
+  const s: AnalyticsScope = typeof scope === "string" ? { accountId: scope } : scope
+
+  const [trades, accounts] = await Promise.all([getTrades(s), getAccounts()])
 
   if (accounts.length === 0 && trades.length === 0) return EMPTY_SUMMARY
 
+  return computePerformanceSummary(trades, startingBalanceFor(accounts, s.accountId))
+}
+
+/** Combined opening balance for the scoped account(s). */
+export function startingBalanceFor(
+  accounts: TradingAccount[],
+  accountId?: string,
+): number {
   const relevant = accountId
     ? accounts.filter((a) => a.id === accountId)
     : accounts
-  const startingBalance = relevant.reduce(
-    (sum, a) => sum + a.startingBalance,
-    0,
-  )
-
-  return computePerformanceSummary(trades, startingBalance)
+  return relevant.reduce((sum, a) => sum + a.startingBalance, 0)
 }
 
 /** Daily realised P&L, oldest first. */
-export async function getDailyPnl(accountId?: string): Promise<DailyPnl[]> {
-  const trades = await getTrades(accountId)
+export async function getDailyPnl(
+  scope: string | AnalyticsScope = {},
+): Promise<DailyPnl[]> {
+  const trades = await getTrades(scope)
   return buildDailyPnl(trades)
 }
 
@@ -425,4 +445,29 @@ export async function getTradedSymbols(): Promise<string[]> {
   const unique = new Set<string>()
   for (const row of data as Row[]) unique.add(str(row.symbol))
   return Array.from(unique).filter(Boolean).sort()
+}
+
+/** A single journal entry for a specific date, or null when none exists. */
+export async function getJournalEntryByDate(
+  date: string,
+): Promise<JournalEntry | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("journal_entries")
+    .select(
+      "id, entry_date, pre_market_plan, session_notes, post_market_review, lessons, mood",
+    )
+    .eq("entry_date", date)
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapJournalEntry(data as Row)
+}
+
+/** A single strategy by id, or null. */
+export async function getStrategyById(id: string): Promise<Strategy | null> {
+  const all = await getStrategies()
+  return all.find((s) => s.id === id) ?? null
 }

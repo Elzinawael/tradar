@@ -1,5 +1,6 @@
 "use client"
 
+import { Suspense } from "react"
 import Link from "next/link"
 import { Bell, Menu, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -58,9 +59,18 @@ export function Topbar({
         )}
       </Button>
 
+      {/*
+        Both controls read the URL via useSearchParams. Without a Suspense
+        boundary that opts statically prerendered pages into a full
+        client-side bailout and fails the production build.
+      */}
       <div className="hidden items-center gap-2 md:flex">
-        <AccountSelector accounts={accounts} />
-        <DateRangePicker />
+        <Suspense fallback={<div className="h-9 w-[180px]" />}>
+          <AccountSelector accounts={accounts} />
+        </Suspense>
+        <Suspense fallback={<div className="h-9 w-[160px]" />}>
+          <DateRangePicker />
+        </Suspense>
       </div>
 
       <div className="ml-auto flex items-center gap-2">
