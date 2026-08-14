@@ -63,7 +63,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onToggleCollapse={() => setCollapsed((v) => !v)}
           onOpenMobileNav={() => setMobileOpen(true)}
         />
-        <main className="flex-1 pb-20 lg:pb-0">{children}</main>
+        <main className="flex-1 px-4 pb-20 md:px-6 lg:pb-0">{children}</main>
       </div>
 
       <MobileTabbar />

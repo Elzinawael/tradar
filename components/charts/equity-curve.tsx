@@ -67,14 +67,14 @@ export function EquityCurve({
             color: "var(--color-popover-foreground)",
             fontSize: 12,
           }}
-          labelFormatter={(v: string) =>
-            new Date(v).toLocaleDateString("en-US", {
+          labelFormatter={(label) =>
+            new Date(String(label)).toLocaleDateString("en-US", {
               month: "short",
               day: "numeric",
               year: "numeric",
             })
           }
-          formatter={(value: number) => [formatCurrency(value), "Equity"]}
+          formatter={(value) => [formatCurrency(Number(value)), "Equity"]}
         />
         <Area
           type="monotone"
