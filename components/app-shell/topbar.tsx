@@ -13,6 +13,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import type { TradingAccount } from "@/lib/types"
+import { signOut } from "@/lib/actions/auth"
 import { AccountSelector } from "./account-selector"
 import { DateRangePicker } from "@/components/date-range-picker"
 
@@ -20,12 +22,16 @@ interface TopbarProps {
   collapsed: boolean
   onToggleCollapse: () => void
   onOpenMobileNav: () => void
+  accounts: TradingAccount[]
+  displayName: string
 }
 
 export function Topbar({
   collapsed,
   onToggleCollapse,
   onOpenMobileNav,
+  accounts,
+  displayName,
 }: TopbarProps) {
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background/85 px-3 backdrop-blur md:px-5">
@@ -53,7 +59,7 @@ export function Topbar({
       </Button>
 
       <div className="hidden items-center gap-2 md:flex">
-        <AccountSelector />
+        <AccountSelector accounts={accounts} />
         <DateRangePicker />
       </div>
 
@@ -89,7 +95,7 @@ export function Topbar({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuLabel>Trader</DropdownMenuLabel>
+            <DropdownMenuLabel className="truncate">{displayName}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link href="/settings?tab=profile">Profile</Link>
@@ -99,7 +105,11 @@ export function Topbar({
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/login">Sign out</Link>
+              <form action={signOut} className="w-full">
+                <button type="submit" className="w-full cursor-default text-left">
+                  Sign out
+                </button>
+              </form>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

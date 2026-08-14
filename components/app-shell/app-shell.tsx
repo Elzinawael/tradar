@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import type { TradingAccount } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { BrandLogo } from "@/components/brand-logo"
 import { SidebarNav } from "./sidebar-nav"
@@ -14,7 +15,13 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+interface AppShellProps {
+  children: React.ReactNode
+  accounts: TradingAccount[]
+  displayName: string
+}
+
+export function AppShell({ children, accounts, displayName }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
 
@@ -62,6 +69,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((v) => !v)}
           onOpenMobileNav={() => setMobileOpen(true)}
+          accounts={accounts}
+          displayName={displayName}
         />
         <main className="flex-1 px-4 pb-20 md:px-6 lg:pb-0">{children}</main>
       </div>

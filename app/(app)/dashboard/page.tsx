@@ -16,18 +16,23 @@ import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
 import { EquityCurve } from "@/components/charts/equity-curve"
 import { PnlCalendar } from "@/components/charts/pnl-calendar"
-import {
-  getDailyPnl,
-  getPerformanceSummary,
-  getTrades,
-} from "@/lib/data"
+import { getAccounts, getDailyPnl, getPerformanceSummary } from "@/lib/data"
 import { formatCurrency, formatPercent } from "@/lib/utils"
 
-export default function DashboardPage() {
-  const summary = getPerformanceSummary()
-  const daily = getDailyPnl()
-  const trades = getTrades()
-  const hasData = trades.length > 0
+export default async function DashboardPage() {
+  const [summary, daily, accounts] = await Promise.all([
+    getPerformanceSummary(),
+    getDailyPnl(),
+    getAccounts(),
+  ])
+  const hasData = daily.length > 0
+
+  // Seed the equity curve with the account's OPENING balance. Using the
+  // current balance here would double-count realised P&L.
+  const startingBalance = accounts.reduce(
+    (sum, account) => sum + account.startingBalance,
+    0,
+  )
 
   return (
     <div className="space-y-6">
@@ -97,7 +102,7 @@ export default function DashboardPage() {
           className="lg:col-span-2"
         >
           {hasData ? (
-            <EquityCurve data={daily} startingBalance={summary.accountBalance} />
+            <EquityCurve data={daily} startingBalance={startingBalance} />
           ) : (
             <EmptyState
               icon={LineChart}

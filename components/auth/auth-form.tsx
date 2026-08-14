@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useActionState } from "react"
+import { useFormStatus } from "react-dom"
 import Link from "next/link"
-import { Info } from "lucide-react"
+import { AlertCircle, Info, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -13,14 +14,43 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  initialAuthState,
+  signIn,
+  signUp,
+  type AuthActionState,
+} from "@/lib/actions/auth"
 
 interface AuthFormProps {
   mode: "login" | "signup"
+  /** False when Supabase env vars are absent; shows a setup notice. */
+  configured?: boolean
+  /** Where to send the user after a successful login. */
+  redirectTo?: string
 }
 
-export function AuthForm({ mode }: AuthFormProps) {
+function SubmitButton({ isSignup }: { isSignup: boolean }) {
+  const { pending } = useFormStatus()
+  return (
+    <Button type="submit" className="mt-1 w-full" disabled={pending}>
+      {pending && <Loader2 className="size-4 animate-spin" />}
+      {isSignup ? "Create account" : "Log in"}
+    </Button>
+  )
+}
+
+export function AuthForm({
+  mode,
+  configured = true,
+  redirectTo = "/dashboard",
+}: AuthFormProps) {
   const isSignup = mode === "signup"
-  const [submitted, setSubmitted] = useState(false)
+
+  const action = isSignup ? signUp : signIn
+  const [state, formAction] = useActionState<AuthActionState, FormData>(
+    action,
+    initialAuthState,
+  )
 
   return (
     <Card className="w-full">
@@ -35,18 +65,19 @@ export function AuthForm({ mode }: AuthFormProps) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            // Stage 1: authentication is not yet connected to Supabase.
-            setSubmitted(true)
-          }}
-        >
+        <form action={formAction} className="flex flex-col gap-4">
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+
           {isSignup && (
             <div className="flex flex-col gap-2">
               <Label htmlFor="name">Full name</Label>
-              <Input id="name" name="name" autoComplete="name" placeholder="Alex Trader" required />
+              <Input
+                id="name"
+                name="name"
+                autoComplete="name"
+                placeholder="Alex Trader"
+                required
+              />
             </div>
           )}
           <div className="flex flex-col gap-2">
@@ -73,20 +104,45 @@ export function AuthForm({ mode }: AuthFormProps) {
               type="password"
               autoComplete={isSignup ? "new-password" : "current-password"}
               placeholder="••••••••"
+              minLength={8}
               required
             />
+            {isSignup && (
+              <p className="text-xs text-muted-foreground">
+                At least 8 characters.
+              </p>
+            )}
           </div>
 
-          <Button type="submit" className="mt-1 w-full">
-            {isSignup ? "Create account" : "Log in"}
-          </Button>
+          <SubmitButton isSignup={isSignup} />
 
-          {submitted && (
+          {state.error && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive-foreground"
+            >
+              <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+              <span>{state.error}</span>
+            </div>
+          )}
+
+          {state.message && (
+            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+              <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>{state.message}</span>
+            </div>
+          )}
+
+          {!configured && (
             <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
               <Info className="mt-0.5 size-4 shrink-0 text-primary" />
               <span>
-                Authentication connects to Supabase in Stage 2. For now you can{" "}
-                <Link href="/dashboard" className="text-primary underline-offset-2 hover:underline">
+                Supabase is not configured yet, so accounts cannot be created.
+                You can still{" "}
+                <Link
+                  href="/dashboard"
+                  className="text-primary underline-offset-2 hover:underline"
+                >
                   explore the platform
                 </Link>
                 .

@@ -1,7 +1,7 @@
 "use client"
 
 import { Wallet } from "lucide-react"
-import { accounts } from "@/lib/data"
+import type { TradingAccount } from "@/lib/types"
 import {
   Select,
   SelectContent,
@@ -10,7 +10,23 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-export function AccountSelector() {
+interface AccountSelectorProps {
+  accounts: TradingAccount[]
+}
+
+export function AccountSelector({ accounts }: AccountSelectorProps) {
+  if (accounts.length === 0) {
+    return (
+      <Select disabled>
+        <SelectTrigger className="h-9 w-[180px] gap-2 border-border bg-card/60">
+          <Wallet className="size-4 text-muted-foreground" />
+          <SelectValue placeholder="No accounts" />
+        </SelectTrigger>
+        <SelectContent />
+      </Select>
+    )
+  }
+
   return (
     <Select defaultValue={accounts[0]?.id}>
       <SelectTrigger className="h-9 w-[180px] gap-2 border-border bg-card/60">
