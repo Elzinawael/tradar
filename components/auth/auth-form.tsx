@@ -14,12 +14,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  initialAuthState,
-  signIn,
-  signUp,
-  type AuthActionState,
-} from "@/lib/actions/auth"
+import { signIn, signUp } from "@/lib/actions/auth"
+import { initialAuthState, type AuthActionState } from "@/lib/actions/state"
 
 interface AuthFormProps {
   mode: "login" | "signup"

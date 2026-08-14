@@ -65,7 +65,7 @@ export function Topbar({
 
       <div className="ml-auto flex items-center gap-2">
         <Button asChild size="sm" className="hidden sm:inline-flex">
-          <Link href="/trades?new=1">
+          <Link href="/trades/new">
             <Plus className="size-4" />
             Add Trade
           </Link>

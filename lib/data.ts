@@ -308,3 +308,121 @@ export async function getProgressRules(date?: string): Promise<ProgressRule[]> {
 
   return rules.map((rule) => ({ ...rule, completed: done.get(rule.id) ?? false }))
 }
+
+// ---------------------------------------------------------------------------
+// Trade queries with filtering, search, sorting and pagination
+// ---------------------------------------------------------------------------
+
+export interface TradeQuery {
+  accountId?: string
+  strategyId?: string
+  symbol?: string
+  status?: string
+  direction?: string
+  from?: string
+  to?: string
+  sort?: string
+  direction_?: "asc" | "desc"
+  page?: number
+  pageSize?: number
+}
+
+export interface TradePage {
+  trades: Trade[]
+  total: number
+  page: number
+  pageSize: number
+  pageCount: number
+}
+
+/** Columns a user is allowed to sort by (allow-list prevents injection). */
+const SORTABLE = new Set([
+  "opened_at",
+  "closed_at",
+  "symbol",
+  "pnl",
+  "quantity",
+  "status",
+  "r_multiple",
+])
+
+const TRADE_COLUMNS =
+  "id, account_id, symbol, direction, entry_price, exit_price, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, strategies(name)"
+
+/**
+ * Paginated, filtered trade listing.
+ *
+ * Filtering and pagination run in Postgres rather than in the browser so the
+ * page stays fast once a user has thousands of trades.
+ */
+export async function getTradesPage(query: TradeQuery = {}): Promise<TradePage> {
+  const page = Math.max(1, Math.floor(query.page ?? 1))
+  const pageSize = Math.min(200, Math.max(5, Math.floor(query.pageSize ?? 25)))
+
+  const supabase = await createClient()
+  if (!supabase) {
+    return { trades: [], total: 0, page, pageSize, pageCount: 0 }
+  }
+
+  const sortColumn =
+    query.sort && SORTABLE.has(query.sort) ? query.sort : "opened_at"
+  const ascending = query.direction_ === "asc"
+
+  let q = supabase
+    .from("trades")
+    .select(TRADE_COLUMNS, { count: "exact" })
+    .order(sortColumn, { ascending })
+
+  if (query.accountId) q = q.eq("account_id", query.accountId)
+  if (query.strategyId) q = q.eq("strategy_id", query.strategyId)
+  if (query.status) q = q.eq("status", query.status)
+  if (query.direction) q = q.eq("direction", query.direction)
+  if (query.symbol) q = q.ilike("symbol", `%${query.symbol}%`)
+  if (query.from) q = q.gte("opened_at", query.from)
+  if (query.to) q = q.lte("opened_at", query.to)
+
+  const fromIndex = (page - 1) * pageSize
+  q = q.range(fromIndex, fromIndex + pageSize - 1)
+
+  const { data, error, count } = await q
+  if (error || !data) {
+    return { trades: [], total: 0, page, pageSize, pageCount: 0 }
+  }
+
+  const total = count ?? 0
+  return {
+    trades: (data as Row[]).map(mapTrade),
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+  }
+}
+
+/** A single trade by id, or null when it does not exist or is not the user's. */
+export async function getTradeById(id: string): Promise<Trade | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("trades")
+    .select(TRADE_COLUMNS)
+    .eq("id", id)
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapTrade(data as Row)
+}
+
+/** Distinct symbols the user has traded, for filter dropdowns. */
+export async function getTradedSymbols(): Promise<string[]> {
+  const supabase = await createClient()
+  if (!supabase) return []
+
+  const { data, error } = await supabase.from("trades").select("symbol")
+  if (error || !data) return []
+
+  const unique = new Set<string>()
+  for (const row of data as Row[]) unique.add(str(row.symbol))
+  return Array.from(unique).filter(Boolean).sort()
+}

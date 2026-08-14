@@ -4,13 +4,7 @@ import { redirect } from "next/navigation"
 import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { isSupabaseConfigured } from "@/lib/supabase/config"
-
-export interface AuthActionState {
-  error: string | null
-  message: string | null
-}
-
-export const initialAuthState: AuthActionState = { error: null, message: null }
+import type { AuthActionState } from "./state"
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MIN_PASSWORD_LENGTH = 8
