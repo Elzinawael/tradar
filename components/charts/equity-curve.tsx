@@ -24,13 +24,16 @@ export function EquityCurve({
   data: DailyPnl[]
   startingBalance?: number
 }) {
-  const series = useMemo(() => {
-    let running = startingBalance
-    return data.map((d) => {
-      running += d.pnl
-      return { date: d.date, equity: running }
-    })
-  }, [data, startingBalance])
+  const series = useMemo(
+    () =>
+      data.reduce<{ date: string; equity: number }[]>((acc, d) => {
+        const previous =
+          acc.length > 0 ? acc[acc.length - 1].equity : startingBalance
+        acc.push({ date: d.date, equity: previous + d.pnl })
+        return acc
+      }, []),
+    [data, startingBalance],
+  )
 
   return (
     <ResponsiveContainer width="100%" height={280}>
