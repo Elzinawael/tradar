@@ -501,3 +501,30 @@ export async function getAccountById(
   const accounts = await getAccounts()
   return accounts.find((a) => a.id === id) ?? null
 }
+
+/**
+ * Everything needed to review a single trading day.
+ *
+ * Reuses getTrades() with a local-day scope and the shared analytics engine,
+ * so a day's metrics are computed by exactly the same code as the dashboard's.
+ */
+export async function getDayDetail(dateKey: string): Promise<{
+  trades: Trade[]
+  summary: PerformanceSummary
+  journal: JournalEntry | null
+}> {
+  // Local-day boundaries: a trading day is a day in the trader's timezone.
+  const start = new Date(`${dateKey}T00:00:00`)
+  const end = new Date(`${dateKey}T23:59:59.999`)
+
+  const [trades, journal] = await Promise.all([
+    getTrades({ from: start.toISOString(), to: end.toISOString() }),
+    getJournalEntryByDate(dateKey),
+  ])
+
+  return {
+    trades,
+    summary: computePerformanceSummary(trades, 0),
+    journal,
+  }
+}

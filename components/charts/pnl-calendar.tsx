@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import Link from "next/link"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import type { DailyPnl } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -86,11 +87,20 @@ export function PnlCalendar({ data }: { data: DailyPnl[] }) {
                 : record.pnl < 0
                   ? "bg-negative/15 text-negative ring-1 ring-inset ring-negative/25"
                   : "bg-muted text-muted-foreground"
+          // Every cell links to that day's review, so the calendar is a way
+          // into the data rather than a static summary.
           return (
-            <div
+            <Link
               key={cell.key}
+              href={`/day-view?date=${cell.key}`}
+              aria-label={
+                record
+                  ? `${cell.key}: ${formatCurrency(record.pnl, { signed: true })} across ${record.trades} trades`
+                  : `${cell.key}: no trades`
+              }
               className={cn(
                 "flex aspect-square flex-col items-center justify-center rounded-md p-1 text-center transition-colors",
+                "hover:ring-2 hover:ring-inset hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 tone,
               )}
             >
@@ -102,7 +112,7 @@ export function PnlCalendar({ data }: { data: DailyPnl[] }) {
                   {formatCurrency(record.pnl, { compact: true, signed: true })}
                 </span>
               )}
-            </div>
+            </Link>
           )
         })}
       </div>
