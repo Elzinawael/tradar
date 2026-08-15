@@ -23,6 +23,7 @@ import {
 } from "./analytics"
 import type {
   BacktestSession,
+  Profile,
   DailyPnl,
   JournalEntry,
   PerformanceSummary,
@@ -69,6 +70,7 @@ function mapAccount(row: Row): TradingAccount {
     broker: strOrNull(row.broker),
     currency: str(row.currency, "USD"),
     startingBalance: num(row.starting_balance),
+    isDefault: Boolean(row.is_default),
   }
 }
 
@@ -470,4 +472,32 @@ export async function getJournalEntryByDate(
 export async function getStrategyById(id: string): Promise<Strategy | null> {
   const all = await getStrategies()
   return all.find((s) => s.id === id) ?? null
+}
+
+
+/** The signed-in user's profile, or null when unauthenticated. */
+export async function getProfile(): Promise<Profile | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, timezone")
+    .maybeSingle()
+
+  if (error || !data) return null
+  const row = data as Row
+  return {
+    id: str(row.id),
+    fullName: strOrNull(row.full_name),
+    timezone: str(row.timezone, "UTC"),
+  }
+}
+
+/** A single trading account by id, or null. */
+export async function getAccountById(
+  id: string,
+): Promise<TradingAccount | null> {
+  const accounts = await getAccounts()
+  return accounts.find((a) => a.id === id) ?? null
 }

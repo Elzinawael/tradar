@@ -42,3 +42,15 @@ export const initialStrategyState: StrategyActionState = {
   error: null,
   fieldErrors: {},
 }
+
+export interface SettingsActionState {
+  error: string | null
+  message: string | null
+  fieldErrors: Record<string, string>
+}
+
+export const initialSettingsState: SettingsActionState = {
+  error: null,
+  message: null,
+  fieldErrors: {},
+}

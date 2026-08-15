@@ -15,6 +15,15 @@ export interface TradingAccount {
   broker: string | null
   currency: string
   startingBalance: number
+  /** The account selected by default in the account switcher. */
+  isDefault: boolean
+}
+
+/** The signed-in user's profile record. */
+export interface Profile {
+  id: string
+  fullName: string | null
+  timezone: string
 }
 
 export interface Trade {
