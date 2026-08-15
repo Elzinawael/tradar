@@ -10,6 +10,20 @@
 import type { TradeDirection, TradeStatus } from "./types"
 
 /**
+ * Rounds a monetary amount to 2 decimal places.
+ *
+ * Binary floating point cannot represent most decimal fractions exactly, so
+ * naive arithmetic produces artefacts: (1.11 - 1.10) * 10000 - 2.50 evaluates
+ * to 97.50000000000009 rather than 97.50. The `pnl` column is numeric(18,2),
+ * so Postgres stores 97.50 either way — rounding here means the value the UI
+ * previews and the value the database keeps are identical, instead of
+ * differing in the last digits.
+ */
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+/**
  * Gross P&L for a single closed position.
  *
  * Long:  (exit - entry) * quantity
@@ -32,7 +46,7 @@ export function computeTradePnl(params: {
   const delta =
     direction === "long" ? exitPrice - entryPrice : entryPrice - exitPrice
 
-  return delta * quantity - fees
+  return roundMoney(delta * quantity - fees)
 }
 
 /**

@@ -54,3 +54,15 @@ export const initialSettingsState: SettingsActionState = {
   message: null,
   fieldErrors: {},
 }
+
+export interface ImportActionState {
+  error: string | null
+  message: string | null
+  imported: number
+}
+
+export const initialImportState: ImportActionState = {
+  error: null,
+  message: null,
+  imported: 0,
+}
