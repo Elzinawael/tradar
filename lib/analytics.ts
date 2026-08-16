@@ -17,10 +17,17 @@
  *     magnitude, which is the conventional profit-factor denominator.
  */
 
-import type { DailyPnl, PerformanceSummary, Trade } from "./types"
+import type { DailyPnl, PerformanceSummary, TradeRow } from "./types"
+
+/**
+ * These functions operate on `TradeRow`, the subset of a trade that carries
+ * result data. Live trades (which also have an accountId) and simulated
+ * backtest trades (which belong to a session instead) both satisfy it, so one
+ * analytics implementation serves both without a placeholder field.
+ */
 
 /** A trade that has been resolved and therefore has realised P&L. */
-export function isClosed(trade: Trade): boolean {
+export function isClosed(trade: TradeRow): boolean {
   return trade.status !== "open"
 }
 
@@ -69,7 +76,7 @@ export const EMPTY_SUMMARY: PerformanceSummary = {
  * Aggregates closed trades into daily P&L records, ordered oldest first.
  * Used by the equity curve and the P&L calendar.
  */
-export function buildDailyPnl(trades: Trade[]): DailyPnl[] {
+export function buildDailyPnl(trades: TradeRow[]): DailyPnl[] {
   const buckets = new Map<string, { pnl: number; trades: number }>()
 
   for (const trade of trades) {
@@ -116,7 +123,7 @@ export function computeMaxDrawdown(
 }
 
 /** Longest run of consecutive winning and losing trades, in chronological order. */
-export function computeStreaks(trades: Trade[]): {
+export function computeStreaks(trades: TradeRow[]): {
   consecutiveWins: number
   consecutiveLosses: number
 } {
@@ -160,7 +167,7 @@ export function computeStreaks(trades: Trade[]): {
  * @param startingBalance  the account's opening balance
  */
 export function computePerformanceSummary(
-  trades: Trade[],
+  trades: TradeRow[],
   startingBalance = 0,
 ): PerformanceSummary {
   const closed = trades.filter(isClosed)

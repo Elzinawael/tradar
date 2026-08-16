@@ -1,6 +1,6 @@
 import Link from "next/link"
 import { ArrowDown, ArrowUp, ListChecks } from "lucide-react"
-import type { Trade } from "@/lib/types"
+import type { Trade, TradeRow } from "@/lib/types"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -15,12 +15,20 @@ import { cn, formatCurrency } from "@/lib/utils"
 import { formatDuration } from "@/lib/trade-math"
 
 interface TradeTableProps {
-  trades: Trade[]
+  trades: TradeRow[]
   /** Current sort column and direction, for header affordances. */
   sort: string
   order: "asc" | "desc"
   /** Preserves active filters when a sort header is clicked. */
   buildSortHref: (column: string) => string
+  /**
+   * Where a row's symbol links to. Defaults to the live trade detail page;
+   * backtesting passes its own so simulated trades open inside their session.
+   */
+  hrefFor?: (trade: TradeRow) => string
+  /** Message shown when there are no rows. */
+  emptyTitle?: string
+  emptyDescription?: string
 }
 
 const STATUS_TONE: Record<Trade["status"], string> = {
@@ -73,13 +81,16 @@ export function TradeTable({
   sort,
   order,
   buildSortHref,
+  hrefFor = (trade) => `/trades/${trade.id}`,
+  emptyTitle = "No trades found",
+  emptyDescription = "Log your first trade, or adjust the filters to widen your search.",
 }: TradeTableProps) {
   if (trades.length === 0) {
     return (
       <EmptyState
         icon={ListChecks}
-        title="No trades found"
-        description="Log your first trade, or adjust the filters to widen your search."
+        title={emptyTitle}
+        description={emptyDescription}
       />
     )
   }
@@ -144,7 +155,7 @@ export function TradeTable({
             <TableRow key={trade.id} className="hover:bg-muted/30">
               <TableCell className="font-medium">
                 <Link
-                  href={`/trades/${trade.id}`}
+                  href={hrefFor(trade)}
                   className="underline-offset-2 hover:text-primary hover:underline"
                 >
                   {trade.symbol}

@@ -38,6 +38,7 @@ apply "$ROOT/supabase/tests/00_local_harness.sql"
 apply "$ROOT/supabase/migrations/0001_init.sql"
 apply "$ROOT/supabase/migrations/0002_rls.sql"
 apply "$ROOT/supabase/migrations/0003_relax_force_rls.sql"
+apply "$ROOT/supabase/migrations/0004_backtest_trades.sql"
 
 echo "==> Running smoke tests"
 # Assertions raise on failure, so ON_ERROR_STOP turns any FAIL into exit 1.

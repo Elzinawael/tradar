@@ -24,6 +24,7 @@ import {
 import type {
   BacktestSession,
   Profile,
+  SimulatedTrade,
   DailyPnl,
   JournalEntry,
   PerformanceSummary,
@@ -118,6 +119,8 @@ function mapBacktestSession(row: Row): BacktestSession {
     initialBalance: num(row.initial_balance),
     riskPerTrade: num(row.risk_per_trade),
     createdAt: str(row.created_at),
+    updatedAt: str(row.updated_at),
+    notes: str(row.notes),
     status: str(row.status, "draft") as BacktestSession["status"],
     netPnl: numOrNull(row.net_pnl),
     tradeCount: num(row.trade_count),
@@ -289,7 +292,7 @@ export async function getBacktestSessions(): Promise<BacktestSession[]> {
   const { data, error } = await supabase
     .from("backtest_sessions")
     .select(
-      "id, name, symbol, timeframe, strategy_id, initial_balance, risk_per_trade, created_at, status, net_pnl, trade_count",
+      "id, name, symbol, timeframe, strategy_id, initial_balance, risk_per_trade, created_at, updated_at, notes, status, net_pnl, trade_count",
     )
     .order("created_at", { ascending: false })
 
@@ -526,5 +529,232 @@ export async function getDayDetail(dateKey: string): Promise<{
     trades,
     summary: computePerformanceSummary(trades, 0),
     journal,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Backtesting
+//
+// Simulated trades map onto the same shape live trades use, so the existing
+// analytics engine, trade-math helpers and TradeTable all work on them without
+// a parallel implementation.
+// ---------------------------------------------------------------------------
+
+const BACKTEST_SESSION_COLUMNS =
+  "id, name, symbol, timeframe, strategy_id, initial_balance, risk_per_trade, created_at, updated_at, notes, status, net_pnl, trade_count"
+
+const BACKTEST_TRADE_COLUMNS =
+  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, strategies(name)"
+
+function mapSimulatedTrade(row: Row): SimulatedTrade {
+  const strategy = row.strategies as Row | null | undefined
+  return {
+    id: str(row.id),
+    sessionId: str(row.session_id),
+    symbol: str(row.symbol),
+    direction: str(row.direction, "long") as TradeDirection,
+    entryPrice: num(row.entry_price),
+    exitPrice: numOrNull(row.exit_price),
+    stopPrice: numOrNull(row.stop_price),
+    takeProfit: numOrNull(row.take_profit),
+    quantity: num(row.quantity),
+    pnl: num(row.pnl),
+    rMultiple: numOrNull(row.r_multiple),
+    strategyId: strOrNull(row.strategy_id),
+    strategyName: strategy ? strOrNull(strategy.name) : null,
+    openedAt: str(row.opened_at),
+    closedAt: strOrNull(row.closed_at),
+    durationMinutes: numOrNull(row.duration_minutes),
+    status: str(row.status, "open") as TradeStatus,
+    tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
+    notes: str(row.notes),
+  }
+}
+
+/** All backtest sessions for the current user, newest first. */
+export async function getBacktestSessionList(): Promise<BacktestSession[]> {
+  const supabase = await createClient()
+  if (!supabase) return []
+
+  const { data, error } = await supabase
+    .from("backtest_sessions")
+    .select(BACKTEST_SESSION_COLUMNS)
+    .order("created_at", { ascending: false })
+
+  if (error || !data) return []
+  return (data as Row[]).map(mapBacktestSession)
+}
+
+/** A single session by id, or null when it is not the caller's. */
+export async function getBacktestSessionById(
+  id: string,
+): Promise<BacktestSession | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("backtest_sessions")
+    .select(BACKTEST_SESSION_COLUMNS)
+    .eq("id", id)
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapBacktestSession(data as Row)
+}
+
+export interface SimulatedTradeQuery {
+  symbol?: string
+  direction?: string
+  status?: string
+  strategyId?: string
+  from?: string
+  to?: string
+}
+
+/** Simulated trades for a session, oldest first so the equity curve reads left to right. */
+export async function getSimulatedTrades(
+  sessionId: string,
+  query: SimulatedTradeQuery = {},
+): Promise<SimulatedTrade[]> {
+  const supabase = await createClient()
+  if (!supabase) return []
+
+  let q = supabase
+    .from("backtest_trades")
+    .select(BACKTEST_TRADE_COLUMNS)
+    .eq("session_id", sessionId)
+    .order("opened_at", { ascending: true })
+
+  if (query.symbol) q = q.ilike("symbol", `%${query.symbol}%`)
+  if (query.direction) q = q.eq("direction", query.direction)
+  if (query.status) q = q.eq("status", query.status)
+  if (query.strategyId) q = q.eq("strategy_id", query.strategyId)
+  if (query.from) q = q.gte("opened_at", query.from)
+  if (query.to) q = q.lte("opened_at", query.to)
+
+  const { data, error } = await q
+  if (error || !data) return []
+  return (data as Row[]).map(mapSimulatedTrade)
+}
+
+/** A single simulated trade by id, or null. */
+export async function getSimulatedTradeById(
+  id: string,
+): Promise<SimulatedTrade | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("backtest_trades")
+    .select(BACKTEST_TRADE_COLUMNS)
+    .eq("id", id)
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapSimulatedTrade(data as Row)
+}
+
+export interface SessionPerformance {
+  session: BacktestSession
+  summary: PerformanceSummary
+  daily: DailyPnl[]
+}
+
+/**
+ * Performance for one session, computed by the shared analytics engine and
+ * seeded with the session's own starting balance.
+ */
+export async function getSessionPerformance(
+  session: BacktestSession,
+  trades: SimulatedTrade[],
+): Promise<SessionPerformance> {
+  return {
+    session,
+    summary: computePerformanceSummary(trades, session.initialBalance),
+    daily: buildDailyPnl(trades),
+  }
+}
+
+export interface BacktestOverview {
+  sessions: BacktestSession[]
+  summary: PerformanceSummary
+  totalSessions: number
+  totalTrades: number
+  best: { session: BacktestSession; netPnl: number } | null
+  worst: { session: BacktestSession; netPnl: number } | null
+  perSession: Map<string, PerformanceSummary>
+}
+
+/**
+ * Aggregate across every session, for the backtesting dashboard.
+ *
+ * Trades are fetched once and grouped in memory rather than issuing a query
+ * per session, so the dashboard stays at two round trips regardless of how
+ * many sessions a user has.
+ */
+export async function getBacktestOverview(): Promise<BacktestOverview> {
+  const empty: BacktestOverview = {
+    sessions: [],
+    summary: EMPTY_SUMMARY,
+    totalSessions: 0,
+    totalTrades: 0,
+    best: null,
+    worst: null,
+    perSession: new Map(),
+  }
+
+  const supabase = await createClient()
+  if (!supabase) return empty
+
+  const sessions = await getBacktestSessionList()
+  if (sessions.length === 0) return empty
+
+  const { data, error } = await supabase
+    .from("backtest_trades")
+    .select(BACKTEST_TRADE_COLUMNS)
+    .order("opened_at", { ascending: true })
+
+  const all = error || !data ? [] : (data as Row[]).map(mapSimulatedTrade)
+
+  const grouped = new Map<string, SimulatedTrade[]>()
+  for (const trade of all) {
+    const bucket = grouped.get(trade.sessionId) ?? []
+    bucket.push(trade)
+    grouped.set(trade.sessionId, bucket)
+  }
+
+  const perSession = new Map<string, PerformanceSummary>()
+  let best: BacktestOverview["best"] = null
+  let worst: BacktestOverview["worst"] = null
+
+  for (const session of sessions) {
+    const summary = computePerformanceSummary(
+      grouped.get(session.id) ?? [],
+      session.initialBalance,
+    )
+    perSession.set(session.id, summary)
+
+    // Only sessions with closed trades can be ranked; an empty session has no
+    // result, and calling it "worst" at 0 would be misleading.
+    if (summary.tradeCount === 0) continue
+    if (best === null || summary.netPnl > best.netPnl) {
+      best = { session, netPnl: summary.netPnl }
+    }
+    if (worst === null || summary.netPnl < worst.netPnl) {
+      worst = { session, netPnl: summary.netPnl }
+    }
+  }
+
+  // Combined balance across sessions so the aggregate curve is meaningful.
+  const totalStarting = sessions.reduce((sum, s) => sum + s.initialBalance, 0)
+
+  return {
+    sessions,
+    summary: computePerformanceSummary(all, totalStarting),
+    totalSessions: sessions.length,
+    totalTrades: all.length,
+    best,
+    worst,
+    perSession,
   }
 }

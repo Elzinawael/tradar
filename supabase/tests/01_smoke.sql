@@ -352,3 +352,139 @@ select assert(
 );
 
 \echo '--- ALL DATABASE TESTS PASSED ---'
+
+-- ---------------------------------------------------------------------------
+-- 8. Backtesting: sessions and simulated trades
+-- ---------------------------------------------------------------------------
+\echo '--- 8. backtesting ---'
+
+-- Recreate a second user; section 7 deleted Bob.
+insert into auth.users (id, email) values
+  ('66666666-6666-6666-6666-666666666666', 'erin@example.com');
+
+insert into public.backtest_sessions (user_id, name, symbol, timeframe, initial_balance, notes)
+values
+  ('11111111-1111-1111-1111-111111111111', 'Alice session', 'EURUSD', 'M15', 10000, 'alice notes'),
+  ('66666666-6666-6666-6666-666666666666', 'Erin session',  'BTCUSD', 'H1',  5000,  'erin notes');
+
+select assert(
+  (select count(*) from public.backtest_sessions) = 2,
+  'backtest sessions created for two users'
+);
+
+-- Simulated trades in each user's own session
+insert into public.backtest_trades
+  (user_id, session_id, symbol, direction, entry_price, exit_price, quantity,
+   pnl, status, opened_at, closed_at, duration_minutes)
+select '11111111-1111-1111-1111-111111111111', id, 'EURUSD', 'long', 1.10, 1.11, 10000,
+       100, 'win', '2026-02-01T09:00:00Z', '2026-02-01T10:00:00Z', 60
+  from public.backtest_sessions where name = 'Alice session';
+
+insert into public.backtest_trades
+  (user_id, session_id, symbol, direction, entry_price, exit_price, quantity,
+   pnl, status, opened_at, closed_at, duration_minutes)
+select '66666666-6666-6666-6666-666666666666', id, 'BTCUSD', 'long', 50000, 49000, 1,
+       -1000, 'loss', '2026-02-01T09:00:00Z', '2026-02-01T12:00:00Z', 180
+  from public.backtest_sessions where name = 'Erin session';
+
+-- A user must not be able to put a trade into someone else's session.
+do $$
+declare erin_session uuid;
+begin
+  select id into erin_session from public.backtest_sessions where name = 'Erin session';
+  begin
+    insert into public.backtest_trades
+      (user_id, session_id, symbol, direction, entry_price, quantity, opened_at, status)
+    values
+      ('11111111-1111-1111-1111-111111111111', erin_session, 'EURUSD', 'long', 1.1, 1, now(), 'open');
+    raise exception 'FAIL  cross-user session insert was accepted';
+  exception when others then
+    if sqlerrm like '%session_id does not belong%' then
+      raise notice 'PASS  cross-user simulated trade insert blocked';
+    else
+      raise;
+    end if;
+  end;
+end $$;
+
+-- Closed-consistency constraint applies to simulated trades too.
+do $$
+declare s uuid;
+begin
+  select id into s from public.backtest_sessions where name = 'Alice session';
+  begin
+    insert into public.backtest_trades
+      (user_id, session_id, symbol, direction, entry_price, quantity, opened_at, closed_at, status)
+    values
+      ('11111111-1111-1111-1111-111111111111', s, 'EURUSD', 'long', 1.1, 1, now(), now(), 'win');
+    raise exception 'FAIL  closed simulated trade without exit price accepted';
+  exception when check_violation then
+    raise notice 'PASS  simulated trade requires an exit price to close';
+  end;
+end $$;
+
+-- RLS isolation for backtesting
+set role authenticated;
+set request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+
+select assert(
+  (select count(*) from public.backtest_sessions) = 1,
+  'Alice sees only her own backtest session'
+);
+select assert(
+  (select count(*) from public.backtest_trades) = 1,
+  'Alice sees only her own simulated trades'
+);
+select assert(
+  (select count(*) from public.backtest_trades where symbol = 'BTCUSD') = 0,
+  'Alice cannot see Erin''s simulated trades'
+);
+
+do $$
+declare affected integer;
+begin
+  update public.backtest_sessions set name = 'hijacked' where name = 'Erin session';
+  get diagnostics affected = row_count;
+  if affected = 0 then
+    raise notice 'PASS  Alice cannot update Erin''s session';
+  else
+    raise exception 'FAIL  Alice updated Erin''s session';
+  end if;
+
+  delete from public.backtest_sessions where name = 'Erin session';
+  get diagnostics affected = row_count;
+  if affected = 0 then
+    raise notice 'PASS  Alice cannot delete Erin''s session';
+  else
+    raise exception 'FAIL  Alice deleted Erin''s session';
+  end if;
+
+  delete from public.backtest_trades where symbol = 'BTCUSD';
+  get diagnostics affected = row_count;
+  if affected = 0 then
+    raise notice 'PASS  Alice cannot delete Erin''s simulated trades';
+  else
+    raise exception 'FAIL  Alice deleted Erin''s simulated trades';
+  end if;
+end $$;
+
+reset role;
+set role anon;
+select assert(
+  (select count(*) from public.backtest_sessions) = 0,
+  'anonymous role sees no backtest sessions'
+);
+select assert(
+  (select count(*) from public.backtest_trades) = 0,
+  'anonymous role sees no simulated trades'
+);
+reset role;
+
+-- Deleting a session removes its simulated trades.
+delete from public.backtest_sessions where name = 'Alice session';
+select assert(
+  (select count(*) from public.backtest_trades where symbol = 'EURUSD') = 0,
+  'deleting a session cascades its simulated trades'
+);
+
+\echo '--- BACKTESTING TESTS PASSED ---'

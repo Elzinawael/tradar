@@ -91,9 +91,28 @@ export interface BacktestSession {
   initialBalance: number
   riskPerTrade: number
   createdAt: string
+  updatedAt: string
+  notes: string
   status: "draft" | "running" | "completed"
   netPnl: number | null
   tradeCount: number
+}
+
+/**
+ * A row shape the trade table can render.
+ *
+ * Simulated backtest trades carry every field a live trade does except
+ * `accountId` — they belong to a session, not a funded account — so the table
+ * accepts this narrower shape and `Trade` satisfies it structurally.
+ */
+export type TradeRow = Omit<Trade, "accountId">
+
+/** A simulated trade belonging to a backtest session. */
+export interface SimulatedTrade extends TradeRow {
+  sessionId: string
+  stopPrice: number | null
+  takeProfit: number | null
+  notes: string
 }
 
 export interface ProgressRule {

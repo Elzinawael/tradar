@@ -66,3 +66,13 @@ export const initialImportState: ImportActionState = {
   message: null,
   imported: 0,
 }
+
+export interface BacktestActionState {
+  error: string | null
+  fieldErrors: Record<string, string>
+}
+
+export const initialBacktestState: BacktestActionState = {
+  error: null,
+  fieldErrors: {},
+}
