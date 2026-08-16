@@ -546,7 +546,7 @@ const BACKTEST_SESSION_COLUMNS =
   "id, name, symbol, timeframe, strategy_id, initial_balance, risk_per_trade, created_at, updated_at, notes, status, net_pnl, trade_count"
 
 const BACKTEST_TRADE_COLUMNS =
-  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, strategies(name)"
+  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, origin, strategies(name)"
 
 function mapSimulatedTrade(row: Row): SimulatedTrade {
   const strategy = row.strategies as Row | null | undefined
@@ -570,6 +570,7 @@ function mapSimulatedTrade(row: Row): SimulatedTrade {
     status: str(row.status, "open") as TradeStatus,
     tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
     notes: str(row.notes),
+    origin: str(row.origin, "manual") === "replay" ? "replay" : "manual",
   }
 }
 
@@ -896,4 +897,22 @@ export async function getIsAdmin(): Promise<boolean> {
   const { data, error } = await supabase.rpc("is_admin")
   if (error) return false
   return data === true
+}
+
+/** The open replay position for a replay, or null when flat. */
+export async function getOpenReplayPosition(
+  replayId: string,
+): Promise<SimulatedTrade | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("backtest_trades")
+    .select(BACKTEST_TRADE_COLUMNS)
+    .eq("replay_id", replayId)
+    .eq("status", "open")
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapSimulatedTrade(data as Row)
 }

@@ -9,6 +9,9 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Target,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react"
 import { ReplayChart } from "./replay-chart"
 import { Button } from "@/components/ui/button"
@@ -23,31 +26,34 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { advanceCursor, visibleCandles, type Candle } from "@/lib/candles"
+import { visibleCandles, type Candle } from "@/lib/candles"
 import { computePositionSize } from "@/lib/trade-math"
-import { placeReplayTrade } from "@/lib/actions/replay"
-import { setReplayCursor } from "@/lib/actions/replay"
+import { validateLevels } from "@/lib/replay-engine"
+import {
+  advanceReplay,
+  closeReplayPosition,
+  openReplayPosition,
+  resetReplay,
+} from "@/lib/actions/replay"
+import { initialBacktestState } from "@/lib/actions/state"
 import { cn, formatCurrency } from "@/lib/utils"
-import type { ReplaySession } from "@/lib/types"
+import type { ReplaySession, SimulatedTrade } from "@/lib/types"
 
 const SPEEDS = [0.5, 1, 2, 5, 10, 25]
 
 interface ReplayPlayerProps {
   replay: ReplaySession
   /**
-   * Bars for the whole selected range.
-   *
-   * Prefetched so playback is smooth — a round trip per bar would make replay
-   * unusable. Only bars at or before the cursor are ever rendered, and the
-   * cursor is authoritative in the database, so this cannot be used to advance
-   * the replay past its range. A user can still inspect this payload in
-   * devtools; that is their own backtest data, and look-ahead prevention here
-   * is a discipline aid rather than an adversarial control.
+   * Bars for the selected range, prefetched so the chart can redraw without a
+   * round trip per frame. Only bars at or before the cursor are rendered, and
+   * the cursor itself is authoritative on the server — this array is never
+   * used to decide an exit.
    */
   candles: Candle[]
-  /** Session equity used for risk-based sizing. */
   balance: number
   riskPercent: number
+  /** The currently open position, or null when flat. */
+  openPosition: SimulatedTrade | null
 }
 
 export function ReplayPlayer({
@@ -55,55 +61,78 @@ export function ReplayPlayer({
   candles,
   balance,
   riskPercent,
+  openPosition,
 }: ReplayPlayerProps) {
   const router = useRouter()
   const [cursorTs, setCursorTs] = useState(replay.cursorTs)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(replay.speed || 1)
-  const [saving, setSaving] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [atEnd, setAtEnd] = useState(false)
 
   const visible = useMemo(
     () => visibleCandles(candles, cursorTs),
     [candles, cursorTs],
   )
   const current = visible[visible.length - 1] ?? null
-  const atEnd = visible.length >= candles.length
 
-  const step = useCallback(
-    (bars: number) => {
-      setCursorTs((prev) => advanceCursor(candles, prev, bars).cursorTs)
+  // Guards against overlapping advance calls when a tick is slower than the
+  // interval, which would otherwise skip bars or evaluate them out of order.
+  const inFlight = useRef(false)
+
+  /**
+   * The single cursor-advance path, used by both Step and Play.
+   *
+   * The server advances the cursor, evaluates the open position against only
+   * the newly revealed bars, and reports any resulting exit.
+   */
+  const advance = useCallback(
+    async (bars: number) => {
+      if (inFlight.current) return
+      inFlight.current = true
+      try {
+        const result = await advanceReplay(replay.id, bars)
+        if (result.error) {
+          setError(result.error)
+          setPlaying(false)
+          return
+        }
+        if (result.cursorTs) setCursorTs(result.cursorTs)
+        setAtEnd(result.atEnd)
+        if (result.atEnd) setPlaying(false)
+
+        if (result.closed) {
+          // Playback stops on a fill so the outcome is not scrolled past. The
+          // rule is deliberate and applies to both Step and Play.
+          setPlaying(false)
+          const { reason, exitPrice, pnl, gapped } = result.closed
+          setNotice(
+            `${reason === "stop" ? "Stop loss" : "Take profit"} hit at ${exitPrice}${
+              gapped ? " (gap fill at the open)" : ""
+            } — ${formatCurrency(pnl, { signed: true })}`,
+          )
+          router.refresh()
+        }
+      } finally {
+        inFlight.current = false
+      }
     },
-    [candles],
+    [replay.id, router],
   )
 
-  // Playback loop. The interval is derived from speed; at 1x a bar appears
-  // every 1000ms. Reaching the end of the range stops the loop by making the
-  // effect bail out, rather than by setting state from inside it.
   const isPlaying = playing && !atEnd
 
+  // Playback drives the same server action as Step. Bars per tick scale with
+  // speed so the effective rate is honoured without one request per frame.
   useEffect(() => {
     if (!isPlaying) return
-    const id = window.setInterval(() => step(1), Math.max(40, 1000 / speed))
+    const tickMs = Math.max(220, 1000 / speed)
+    const barsPerTick = Math.max(1, Math.round((speed * tickMs) / 1000))
+    const id = window.setInterval(() => void advance(barsPerTick), tickMs)
     return () => window.clearInterval(id)
-  }, [isPlaying, speed, step])
-
-  // Persist the cursor when it settles, so reopening the replay resumes where
-  // it left off. Debounced to avoid a write per bar during fast playback.
-  const persistTimer = useRef<number | null>(null)
-  useEffect(() => {
-    if (persistTimer.current) window.clearTimeout(persistTimer.current)
-    persistTimer.current = window.setTimeout(() => {
-      const body = new FormData()
-      body.set("id", replay.id)
-      body.set("cursorTs", cursorTs)
-      void setReplayCursor(body)
-    }, 800)
-    return () => {
-      if (persistTimer.current) window.clearTimeout(persistTimer.current)
-    }
-  }, [cursorTs, replay.id])
+  }, [isPlaying, speed, advance])
 
   // --- order ticket -------------------------------------------------------
   const [direction, setDirection] = useState<"long" | "short">("long")
@@ -112,9 +141,20 @@ export function ReplayPlayer({
 
   const entryPrice = current?.close ?? null
   const stop = stopPrice.trim() === "" ? null : Number(stopPrice)
+  const target = takeProfit.trim() === "" ? null : Number(takeProfit)
 
-  // Size is derived, never typed: risk % of session equity divided by the
-  // distance to the stop. Returns null when sizing is undefined.
+  const levelErrors = useMemo(() => {
+    if (entryPrice === null) return {}
+    return validateLevels({
+      direction,
+      entryPrice,
+      stopPrice: stop,
+      takeProfit: target,
+    })
+  }, [direction, entryPrice, stop, target])
+
+  // Preview only. The server recomputes this with the same helper before
+  // writing, so the browser cannot influence the size that is stored.
   const quantity = useMemo(() => {
     if (entryPrice === null) return null
     return computePositionSize({
@@ -128,25 +168,22 @@ export function ReplayPlayer({
 
   const riskAmount = (balance * riskPercent) / 100
 
-  async function submitTrade(formData: FormData) {
-    setSaving(true)
+  async function submitOpen(formData: FormData) {
+    setBusy(true)
     setError(null)
     setNotice(null)
     try {
-      const result = await placeReplayTrade(
-        { error: null, fieldErrors: {} },
-        formData,
-      )
+      const result = await openReplayPosition(initialBacktestState, formData)
       if (result.error) {
         setError(result.error)
       } else {
-        setNotice("Trade recorded in the session.")
         setStopPrice("")
         setTakeProfit("")
+        setNotice("Position opened. Advance the replay to see how it resolves.")
         router.refresh()
       }
     } finally {
-      setSaving(false)
+      setBusy(false)
     }
   }
 
@@ -163,23 +200,19 @@ export function ReplayPlayer({
         <CardContent className="flex flex-wrap items-center gap-3 pt-6">
           <Button
             onClick={() => setPlaying((p) => !p)}
-            disabled={atEnd}
+            disabled={atEnd || busy}
             size="sm"
             aria-label={isPlaying ? "Pause replay" : "Play replay"}
           >
-            {isPlaying ? (
-              <Pause className="size-4" />
-            ) : (
-              <Play className="size-4" />
-            )}
+            {isPlaying ? <Pause className="size-4" /> : <Play className="size-4" />}
             {isPlaying ? "Pause" : "Play"}
           </Button>
 
           <Button
             variant="outline"
             size="sm"
-            onClick={() => step(1)}
-            disabled={atEnd}
+            onClick={() => void advance(1)}
+            disabled={atEnd || busy}
             aria-label="Step forward one candle"
           >
             <ChevronRight className="size-4" />
@@ -189,10 +222,12 @@ export function ReplayPlayer({
           <form
             action={async (fd) => {
               fd.set("id", replay.id)
-              const { resetReplay } = await import("@/lib/actions/replay")
               await resetReplay(fd)
               setCursorTs(replay.rangeStart)
               setPlaying(false)
+              setAtEnd(false)
+              setNotice(null)
+              router.refresh()
             }}
           >
             <Button type="submit" variant="ghost" size="sm">
@@ -205,10 +240,7 @@ export function ReplayPlayer({
             <Label htmlFor="speed" className="text-xs text-muted-foreground">
               Speed
             </Label>
-            <Select
-              value={String(speed)}
-              onValueChange={(v) => setSpeed(Number(v))}
-            >
+            <Select value={String(speed)} onValueChange={(v) => setSpeed(Number(v))}>
               <SelectTrigger id="speed" className="h-9 w-[90px]">
                 <SelectValue />
               </SelectTrigger>
@@ -223,9 +255,7 @@ export function ReplayPlayer({
           </div>
 
           <div className="ml-auto flex items-center gap-3 text-sm">
-            <Badge variant="outline">
-              {visible.length} / {candles.length} bars
-            </Badge>
+            <Badge variant="outline">{visible.length} bars shown</Badge>
             {current && (
               <span className="font-mono tabular-nums text-muted-foreground">
                 {new Date(current.ts).toLocaleString()} · {current.close}
@@ -243,165 +273,209 @@ export function ReplayPlayer({
         </CardContent>
       </Card>
 
-      {/* Order ticket */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold">Place a trade</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form action={submitTrade} className="flex flex-col gap-4">
-            <input type="hidden" name="replayId" value={replay.id} />
-            <input type="hidden" name="direction" value={direction} />
-            <input
-              type="hidden"
-              name="quantity"
-              value={quantity ?? ""}
-            />
+      {notice && (
+        <div className="rounded-md border border-primary/30 bg-primary/10 p-3 text-sm text-primary">
+          {notice}
+        </div>
+      )}
 
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex gap-1">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={direction === "long" ? "default" : "outline"}
-                  onClick={() => setDirection("long")}
-                  className={cn(
-                    direction === "long" &&
-                      "bg-positive text-background hover:bg-positive/90",
-                  )}
-                >
-                  Long
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={direction === "short" ? "default" : "outline"}
-                  onClick={() => setDirection("short")}
-                  className={cn(
-                    direction === "short" &&
-                      "bg-negative text-background hover:bg-negative/90",
-                  )}
-                >
-                  Short
-                </Button>
-              </div>
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive-foreground"
+        >
+          <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <span>{error}</span>
+        </div>
+      )}
 
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="stopPrice" className="text-xs">
-                  Stop loss
-                </Label>
-                <Input
-                  id="stopPrice"
-                  name="stopPrice"
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={stopPrice}
-                  onChange={(e) => setStopPrice(e.target.value)}
-                  placeholder="Required for sizing"
-                  className="h-9 w-[150px]"
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="takeProfit" className="text-xs">
-                  Take profit
-                </Label>
-                <Input
-                  id="takeProfit"
-                  name="takeProfit"
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={takeProfit}
-                  onChange={(e) => setTakeProfit(e.target.value)}
-                  placeholder="Optional"
-                  className="h-9 w-[150px]"
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="exitPrice" className="text-xs">
-                  Exit price
-                </Label>
-                <Input
-                  id="exitPrice"
-                  name="exitPrice"
-                  type="number"
-                  step="any"
-                  min="0"
-                  placeholder="Blank if open"
-                  className="h-9 w-[150px]"
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="closedAt" className="text-xs">
-                  Exit time
-                </Label>
-                <Input
-                  id="closedAt"
-                  name="closedAt"
-                  type="datetime-local"
-                  className="h-9 w-[210px]"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-4 rounded-md border border-border bg-muted/20 p-3 text-xs">
-              <span className="text-muted-foreground">
-                Entry{" "}
-                <span className="font-mono text-foreground">
-                  {entryPrice ?? "—"}
-                </span>
-              </span>
-              <span className="text-muted-foreground">
-                Risk{" "}
-                <span className="font-mono text-foreground">
-                  {formatCurrency(riskAmount)} ({riskPercent}%)
-                </span>
-              </span>
-              <span className="text-muted-foreground">
-                Size{" "}
-                <span className="font-mono text-foreground">
-                  {quantity ?? "—"}
-                </span>
-              </span>
-              {quantity === null && (
-                <span className="text-muted-foreground">
-                  Set a stop on the losing side of entry to size the position.
-                </span>
-              )}
-            </div>
-
-            {error && (
-              <div
-                role="alert"
-                className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive-foreground"
+      {openPosition ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+              Open position
+              <Badge
+                variant="outline"
+                className={cn(
+                  "capitalize",
+                  openPosition.direction === "long"
+                    ? "border-positive/30 bg-positive/10 text-positive"
+                    : "border-negative/30 bg-negative/10 text-negative",
+                )}
               >
-                <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-                <span>{error}</span>
-              </div>
-            )}
+                {openPosition.direction}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+              {[
+                ["Symbol", openPosition.symbol],
+                ["Entry", String(openPosition.entryPrice)],
+                ["Stop", openPosition.stopPrice ?? "—"],
+                ["Target", openPosition.takeProfit ?? "—"],
+                ["Size", String(openPosition.quantity)],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {label}
+                  </dt>
+                  <dd className="font-mono text-sm tabular-nums">{value}</dd>
+                </div>
+              ))}
+            </dl>
 
-            {notice && (
-              <div className="rounded-md border border-positive/30 bg-positive/10 p-3 text-xs text-positive">
-                {notice}
-              </div>
-            )}
+            <p className="text-xs text-muted-foreground">
+              The replay engine closes this position automatically when a candle
+              reaches the stop or the target. If a single candle touches both,
+              the stop is taken — a bar records only its high and low, not the
+              order they occurred in, so the ambiguous case always resolves
+              against you rather than being guessed.
+            </p>
 
-            <div>
-              <Button
-                type="submit"
-                disabled={saving || quantity === null || entryPrice === null}
-              >
-                {saving && <Loader2 className="size-4 animate-spin" />}
-                Record {direction} trade
+            <form action={closeReplayPosition}>
+              <input type="hidden" name="replayId" value={replay.id} />
+              <Button type="submit" variant="outline" size="sm">
+                Close at current candle
               </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+            </form>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold">Place a trade</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form action={submitOpen} className="flex flex-col gap-4">
+              <input type="hidden" name="replayId" value={replay.id} />
+              <input type="hidden" name="direction" value={direction} />
+
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={direction === "long" ? "default" : "outline"}
+                    onClick={() => setDirection("long")}
+                    className={cn(
+                      direction === "long" &&
+                        "bg-positive text-background hover:bg-positive/90",
+                    )}
+                  >
+                    <TrendingUp className="size-4" />
+                    Long
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={direction === "short" ? "default" : "outline"}
+                    onClick={() => setDirection("short")}
+                    className={cn(
+                      direction === "short" &&
+                        "bg-negative text-background hover:bg-negative/90",
+                    )}
+                  >
+                    <TrendingDown className="size-4" />
+                    Short
+                  </Button>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="stopPrice" className="text-xs">
+                    Stop loss
+                  </Label>
+                  <Input
+                    id="stopPrice"
+                    name="stopPrice"
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={stopPrice}
+                    onChange={(e) => setStopPrice(e.target.value)}
+                    placeholder="Required"
+                    className="h-9 w-[160px]"
+                    aria-invalid={Boolean(levelErrors.stopPrice)}
+                  />
+                  {levelErrors.stopPrice && (
+                    <p className="text-xs text-negative">
+                      {levelErrors.stopPrice}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="takeProfit" className="text-xs">
+                    Take profit
+                  </Label>
+                  <Input
+                    id="takeProfit"
+                    name="takeProfit"
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={takeProfit}
+                    onChange={(e) => setTakeProfit(e.target.value)}
+                    placeholder="Optional"
+                    className="h-9 w-[160px]"
+                    aria-invalid={Boolean(levelErrors.takeProfit)}
+                  />
+                  {levelErrors.takeProfit && (
+                    <p className="text-xs text-negative">
+                      {levelErrors.takeProfit}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 rounded-md border border-border bg-muted/20 p-3 text-xs">
+                <span className="text-muted-foreground">
+                  Entry{" "}
+                  <span className="font-mono text-foreground">
+                    {entryPrice ?? "—"}
+                  </span>
+                </span>
+                <span className="text-muted-foreground">
+                  Risk{" "}
+                  <span className="font-mono text-foreground">
+                    {formatCurrency(riskAmount)} ({riskPercent}%)
+                  </span>
+                </span>
+                <span className="text-muted-foreground">
+                  Size{" "}
+                  <span className="font-mono text-foreground">
+                    {quantity ?? "—"}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <Target className="size-3.5" />
+                  Exit is decided by the market, not entered by you.
+                </span>
+              </div>
+
+              <div>
+                <Button
+                  type="submit"
+                  disabled={
+                    busy ||
+                    quantity === null ||
+                    entryPrice === null ||
+                    Object.keys(levelErrors).length > 0
+                  }
+                  className={cn(
+                    direction === "long"
+                      ? "bg-positive text-background hover:bg-positive/90"
+                      : "bg-negative text-background hover:bg-negative/90",
+                  )}
+                >
+                  {busy && <Loader2 className="size-4 animate-spin" />}
+                  Open {direction}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

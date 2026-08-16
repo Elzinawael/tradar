@@ -113,6 +113,8 @@ export interface SimulatedTrade extends TradeRow {
   stopPrice: number | null
   takeProfit: number | null
   notes: string
+  /** Whether the trade was hand-entered or produced by the replay engine. */
+  origin: "manual" | "replay"
 }
 
 export interface ProgressRule {

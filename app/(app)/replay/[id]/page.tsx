@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card"
 import {
   getBacktestSessionById,
   getCandles,
+  getOpenReplayPosition,
   getReplaySessionById,
   getSessionPerformance,
   getSimulatedTrades,
@@ -33,7 +34,7 @@ export default async function ReplayDetailPage({
   const session = await getBacktestSessionById(replay.sessionId)
   if (!session) notFound()
 
-  const [candles, trades] = await Promise.all([
+  const [candles, trades, openPosition] = await Promise.all([
     // Bounded to the replay's own window: candles outside the selected range
     // are never fetched, so they cannot reach the client at all.
     getCandles({
@@ -44,6 +45,7 @@ export default async function ReplayDetailPage({
       limit: 20000,
     }),
     getSimulatedTrades(session.id),
+    getOpenReplayPosition(replay.id),
   ])
 
   const { summary } = await getSessionPerformance(session, trades)
@@ -132,6 +134,7 @@ export default async function ReplayDetailPage({
           candles={candles}
           balance={balance}
           riskPercent={riskPercent}
+          openPosition={openPosition}
         />
       )}
 
