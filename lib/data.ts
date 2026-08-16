@@ -16,6 +16,7 @@
  */
 
 import { createClient } from "@/lib/supabase/server"
+import type { Candle } from "./candles"
 import {
   EMPTY_SUMMARY,
   buildDailyPnl,
@@ -24,6 +25,7 @@ import {
 import type {
   BacktestSession,
   Profile,
+  ReplaySession,
   SimulatedTrade,
   DailyPnl,
   JournalEntry,
@@ -757,4 +759,124 @@ export async function getBacktestOverview(): Promise<BacktestOverview> {
     worst,
     perSession,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Candles and replay
+// ---------------------------------------------------------------------------
+
+function mapCandle(row: Row): Candle {
+  return {
+    ts: str(row.ts),
+    open: num(row.open),
+    high: num(row.high),
+    low: num(row.low),
+    close: num(row.close),
+    volume: numOrNull(row.volume),
+  }
+}
+
+/**
+ * Candles for a symbol/timeframe within a range.
+ *
+ * `until` is the replay cursor. When supplied, no candle after it is returned,
+ * so a future bar cannot reach the client through this path at all.
+ */
+export async function getCandles(params: {
+  symbol: string
+  timeframe: string
+  from?: string
+  to?: string
+  until?: string
+  limit?: number
+}): Promise<Candle[]> {
+  const supabase = await createClient()
+  if (!supabase) return []
+
+  let q = supabase
+    .from("candles")
+    .select("ts, open, high, low, close, volume")
+    .eq("symbol", params.symbol)
+    .eq("timeframe", params.timeframe)
+    .order("ts", { ascending: true })
+
+  if (params.from) q = q.gte("ts", params.from)
+  if (params.to) q = q.lte("ts", params.to)
+  if (params.until) q = q.lte("ts", params.until)
+  q = q.limit(Math.min(20000, Math.max(1, params.limit ?? 5000)))
+
+  const { data, error } = await q
+  if (error || !data) return []
+  return (data as Row[]).map(mapCandle)
+}
+
+/** Distinct symbol/timeframe pairs available to replay. */
+export async function getCandleCatalog(): Promise<
+  { symbol: string; timeframe: string; count: number; first: string; last: string }[]
+> {
+  const supabase = await createClient()
+  if (!supabase) return []
+
+  // No aggregate endpoint in PostgREST for this shape, so the summary view
+  // does the grouping in Postgres.
+  const { data, error } = await supabase
+    .from("candle_catalog")
+    .select("symbol, timeframe, candle_count, first_ts, last_ts")
+    .order("symbol", { ascending: true })
+
+  if (error || !data) return []
+  return (data as Row[]).map((row) => ({
+    symbol: str(row.symbol),
+    timeframe: str(row.timeframe),
+    count: num(row.candle_count),
+    first: str(row.first_ts),
+    last: str(row.last_ts),
+  }))
+}
+
+function mapReplaySession(row: Row): ReplaySession {
+  return {
+    id: str(row.id),
+    sessionId: str(row.session_id),
+    symbol: str(row.symbol),
+    timeframe: str(row.timeframe),
+    rangeStart: str(row.range_start),
+    rangeEnd: str(row.range_end),
+    cursorTs: str(row.cursor_ts),
+    speed: num(row.speed, 1),
+  }
+}
+
+const REPLAY_COLUMNS =
+  "id, session_id, symbol, timeframe, range_start, range_end, cursor_ts, speed, created_at"
+
+/** Replay sessions belonging to the current user, newest first. */
+export async function getReplaySessions(): Promise<ReplaySession[]> {
+  const supabase = await createClient()
+  if (!supabase) return []
+
+  const { data, error } = await supabase
+    .from("replay_sessions")
+    .select(REPLAY_COLUMNS)
+    .order("created_at", { ascending: false })
+
+  if (error || !data) return []
+  return (data as Row[]).map(mapReplaySession)
+}
+
+/** A single replay session by id, or null when it is not the caller's. */
+export async function getReplaySessionById(
+  id: string,
+): Promise<ReplaySession | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("replay_sessions")
+    .select(REPLAY_COLUMNS)
+    .eq("id", id)
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapReplaySession(data as Row)
 }

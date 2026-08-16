@@ -98,7 +98,10 @@ export function computeRMultiple(params: {
   const risk = riskPerUnit * quantity
   if (!Number.isFinite(risk) || risk <= 0) return null
 
-  return pnl / risk
+  // Rounded to 4 dp to match the numeric(10,4) r_multiple column. Without
+  // this, a trade stopped out for exactly its risk returns -0.9999999999999991
+  // rather than -1, so the displayed value disagreed with the stored one.
+  return Math.round((pnl / risk + Number.EPSILON) * 1e4) / 1e4
 }
 
 /** Formats whole minutes as a compact human duration (e.g. "2h 15m"). */
@@ -111,4 +114,52 @@ export function formatDuration(minutes: number | null): string {
   const days = Math.floor(hours / 24)
   const restHours = hours % 24
   return restHours === 0 ? `${days}d` : `${days}d ${restHours}h`
+}
+
+/**
+ * Risk-based position size.
+ *
+ * Answers: "if I am willing to lose `riskPercent` of `balance` on this trade,
+ * and my stop is at `stopPrice`, how many units do I buy?"
+ *
+ *   riskAmount   = balance * riskPercent / 100
+ *   riskPerUnit  = |entry - stop|
+ *   quantity     = riskAmount / riskPerUnit
+ *
+ * Deterministic and side-effect free so replay, manual entry and any future
+ * automation all size positions identically.
+ *
+ * Returns null rather than a misleading number when sizing is undefined:
+ * no stop, a stop equal to entry (zero risk per unit, implying infinite size),
+ * a non-positive balance, or a stop on the wrong side of entry — a long whose
+ * stop sits above entry is not a stop, and sizing it would silently invert the
+ * trader's intent.
+ */
+export function computePositionSize(params: {
+  direction: TradeDirection
+  entryPrice: number
+  stopPrice: number | null
+  balance: number
+  riskPercent: number
+}): number | null {
+  const { direction, entryPrice, stopPrice, balance, riskPercent } = params
+
+  if (stopPrice === null) return null
+  if (!Number.isFinite(balance) || balance <= 0) return null
+  if (!Number.isFinite(riskPercent) || riskPercent <= 0) return null
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0) return null
+  if (!Number.isFinite(stopPrice) || stopPrice <= 0) return null
+
+  // The stop must sit on the losing side of the entry.
+  const riskPerUnit =
+    direction === "long" ? entryPrice - stopPrice : stopPrice - entryPrice
+  if (riskPerUnit <= 0) return null
+
+  const riskAmount = (balance * riskPercent) / 100
+  const quantity = riskAmount / riskPerUnit
+
+  if (!Number.isFinite(quantity) || quantity <= 0) return null
+
+  // 8 dp matches the numeric(18,8) quantity column.
+  return Math.round(quantity * 1e8) / 1e8
 }

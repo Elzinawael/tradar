@@ -152,3 +152,16 @@ export interface DailyPnl {
   trades: number
   result: "win" | "loss" | "breakeven"
 }
+
+/** A persisted replay: which market, which window, and how far it has run. */
+export interface ReplaySession {
+  id: string
+  sessionId: string
+  symbol: string
+  timeframe: string
+  rangeStart: string
+  rangeEnd: string
+  /** Furthest revealed bar. Never past rangeEnd. */
+  cursorTs: string
+  speed: number
+}

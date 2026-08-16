@@ -76,3 +76,15 @@ export const initialBacktestState: BacktestActionState = {
   error: null,
   fieldErrors: {},
 }
+
+export interface CandleImportState {
+  error: string | null
+  message: string | null
+  imported: number
+}
+
+export const initialCandleImportState: CandleImportState = {
+  error: null,
+  message: null,
+  imported: 0,
+}
