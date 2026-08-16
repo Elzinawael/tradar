@@ -54,9 +54,7 @@ export function ReplayChart({ candles, height = 420 }: ReplayChartProps) {
     const container = containerRef.current
     if (!container) return
 
-    const styles = getComputedStyle(document.documentElement)
-    const token = (name: string, fallback: string) =>
-      styles.getPropertyValue(name).trim() || fallback
+    const token = (_name: string, fallback: string) => fallback
 
     const chart = createChart(container, {
       height,
