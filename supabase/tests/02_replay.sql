@@ -417,6 +417,13 @@ reset role;
 
 \echo '--- R8. import_candles() is the only write path ---'
 
+-- Ingestion is admin-only (0006). This section exercises the WRITE PATH, so
+-- the fixture user is granted admin; authorisation itself is covered by
+-- 03_admin.sql.
+insert into public.admin_users (user_id, note)
+values ('aaaaaaaa-0000-0000-0000-000000000001', 'replay test fixture')
+on conflict (user_id) do nothing;
+
 set role authenticated;
 set request.jwt.claims = '{"sub":"aaaaaaaa-0000-0000-0000-000000000001"}';
 

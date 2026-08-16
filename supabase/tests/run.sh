@@ -40,19 +40,26 @@ apply "$ROOT/supabase/migrations/0002_rls.sql"
 apply "$ROOT/supabase/migrations/0003_relax_force_rls.sql"
 apply "$ROOT/supabase/migrations/0004_backtest_trades.sql"
 apply "$ROOT/supabase/migrations/0005_candles_and_replay.sql"
+apply "$ROOT/supabase/migrations/0006_admin_candle_ingestion.sql"
 
 echo "==> Running smoke tests"
 # Assertions raise on failure, so ON_ERROR_STOP turns any FAIL into exit 1.
 psql -h "$HOST" -p "$PORT" -U "$USER_NAME" -d "$DB" -v ON_ERROR_STOP=1 \
   -f "$ROOT/supabase/tests/01_smoke.sql" 2>&1 |
   sed 's/^psql:.*NOTICE:  //' |
-  grep -E 'PASS|FAIL|^---'
+  grep -E 'PASS|FAIL|ERROR|^---'
 
 echo "==> Running replay tests"
 psql -h "$HOST" -p "$PORT" -U "$USER_NAME" -d "$DB" -v ON_ERROR_STOP=1 \
   -f "$ROOT/supabase/tests/02_replay.sql" 2>&1 |
   sed 's/^psql:.*NOTICE:  //' |
-  grep -E 'PASS|FAIL|^---'
+  grep -E 'PASS|FAIL|ERROR|^---'
+
+echo "==> Running admin tests"
+psql -h "$HOST" -p "$PORT" -U "$USER_NAME" -d "$DB" -v ON_ERROR_STOP=1 \
+  -f "$ROOT/supabase/tests/03_admin.sql" 2>&1 |
+  sed 's/^psql:.*NOTICE:  //' |
+  grep -E 'PASS|FAIL|NOTE|ERROR|^---'
 
 echo
 echo "==> All database tests passed"

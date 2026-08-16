@@ -51,6 +51,30 @@ function isSaneCandle(c: Candle): boolean {
   return true
 }
 
+/**
+ * Server-side admin gate.
+ *
+ * Defence in depth and a clearer error message: import_candles() rejects
+ * non-administrators inside the database regardless, so removing this check
+ * would not open a hole — it would only produce a worse message.
+ */
+async function requireAdmin(): Promise<string | null> {
+  const supabase = await createClient()
+  if (!supabase) return "Supabase is not configured."
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return "You must be signed in."
+
+  const { data, error } = await supabase.rpc("is_admin")
+  if (error) return "Could not verify your permissions."
+  if (data !== true) {
+    return "Importing market data is restricted to administrators."
+  }
+  return null
+}
+
 async function upsertCandles(
   rows: CandleRow[],
 ): Promise<{ inserted: number; error: string | null }> {
@@ -98,6 +122,9 @@ export async function importCandlesCsv(
   _prev: CandleImportState,
   formData: FormData,
 ): Promise<CandleImportState> {
+  const denied = await requireAdmin()
+  if (denied) return { error: denied, message: null, imported: 0 }
+
   const symbol = String(formData.get("symbol") ?? "").trim().toUpperCase()
   const timeframe = String(formData.get("timeframe") ?? "").trim()
   const csv = String(formData.get("csv") ?? "")
@@ -191,6 +218,11 @@ export async function importCandlesFromBinance(
   _prev: CandleImportState,
   formData: FormData,
 ): Promise<CandleImportState> {
+  // Checked before contacting Binance, so a non-admin cannot use the app as
+  // an outbound request proxy.
+  const denied = await requireAdmin()
+  if (denied) return { error: denied, message: null, imported: 0 }
+
   const symbol = String(formData.get("symbol") ?? "").trim().toUpperCase()
   const timeframe = String(formData.get("timeframe") ?? "").trim()
   const fromRaw = String(formData.get("from") ?? "").trim()

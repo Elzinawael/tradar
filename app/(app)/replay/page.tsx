@@ -6,14 +6,15 @@ import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { getCandleCatalog, getReplaySessions } from "@/lib/data"
+import { getCandleCatalog, getIsAdmin, getReplaySessions } from "@/lib/data"
 
 export const metadata: Metadata = { title: "Trade Replay" }
 
 export default async function ReplayPage() {
-  const [replays, catalog] = await Promise.all([
+  const [replays, catalog, isAdmin] = await Promise.all([
     getReplaySessions(),
     getCandleCatalog(),
+    getIsAdmin(),
   ])
 
   return (
@@ -43,11 +44,17 @@ export default async function ReplayPage() {
         <EmptyState
           icon={Database}
           title="No market data loaded"
-          description="Replay needs historical candles. Import a CSV from your broker, or pull crypto candles from Binance — no API key required."
+          description={
+            isAdmin
+              ? "Replay needs historical candles. Import a CSV from your broker, or pull crypto candles from Binance — no API key required."
+              : "Replay needs historical candles, and market data is managed by an administrator on this instance. Ask them to load the symbol you need."
+          }
           action={
-            <Button asChild>
-              <Link href="/replay/data">Load market data</Link>
-            </Button>
+            isAdmin ? (
+              <Button asChild>
+                <Link href="/replay/data">Load market data</Link>
+              </Button>
+            ) : undefined
           }
         />
       )}

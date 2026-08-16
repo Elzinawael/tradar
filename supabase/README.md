@@ -42,6 +42,9 @@ pasting the contents of each and executing:
 1. `supabase/migrations/0001_init.sql` — tables, enums, constraints, indexes, triggers
 2. `supabase/migrations/0002_rls.sql` — RLS policies, ownership guards, grants, signup provisioning
 3. `supabase/migrations/0003_relax_force_rls.sql` — corrective migration (see below)
+4. `supabase/migrations/0004_backtest_trades.sql` — simulated trades for backtesting
+5. `supabase/migrations/0005_candles_and_replay.sql` — historical candles and trade replay
+6. `supabase/migrations/0006_admin_candle_ingestion.sql` — restricts candle import to administrators
 
 If you prefer the CLI and have it linked:
 
@@ -146,3 +149,49 @@ none of the first account's trades.
 | `new row violates row-level security policy` | `FORCE ROW LEVEL SECURITY` still set — run `0003` |
 | Auth screens say Supabase is not configured | `.env.local` missing or not picked up; restart the dev server |
 | Logged in but redirected to `/login` | Cookies blocked, or the URL/anon key belong to different projects |
+
+
+---
+
+## 7. Administrators
+
+Candles are **shared reference data**: every signed-in user reads the same
+bars, and Replay works for everyone. Because one bad import would affect all
+users, **writing** candles is restricted to administrators.
+
+Admin status is stored in `public.admin_users`. That table has a
+read-your-own-row policy and **no insert, update or delete policy at all**, so
+membership cannot be changed through the API by anyone — only from the SQL
+editor.
+
+It is deliberately not a flag on `profiles`: `profiles_update_own` lets a user
+update their own profile row, and PostgreSQL RLS policies cannot be scoped to
+individual columns, so an `is_admin` column there would be self-grantable.
+
+### Grant admin
+
+Run in **SQL Editor**:
+
+```sql
+insert into public.admin_users (user_id, note)
+select id, 'primary admin' from auth.users where email = 'you@example.com';
+```
+
+### Revoke admin
+
+```sql
+delete from public.admin_users
+ where user_id = (select id from auth.users where email = 'them@example.com');
+```
+
+### What changes for each role
+
+| | Read candles | Use Replay | Import candles |
+|---|---|---|---|
+| Anonymous | No | No | No |
+| Authenticated | **Yes** | **Yes** | No |
+| Administrator | Yes | Yes | **Yes** |
+
+Enforcement is in the database: `import_candles()` raises
+`candle import is restricted to administrators` for non-admins. The UI hides
+the import forms as a courtesy, but hiding them is not what makes it safe.

@@ -880,3 +880,20 @@ export async function getReplaySessionById(
   if (error || !data) return null
   return mapReplaySession(data as Row)
 }
+
+/**
+ * Whether the current user is an administrator.
+ *
+ * Backed by public.is_admin(), which reads the admin_users table that no
+ * client can write. This is used to decide what to SHOW; it is not the
+ * security boundary — import_candles() enforces the same check inside the
+ * database, so hiding the UI is a courtesy and the database is the control.
+ */
+export async function getIsAdmin(): Promise<boolean> {
+  const supabase = await createClient()
+  if (!supabase) return false
+
+  const { data, error } = await supabase.rpc("is_admin")
+  if (error) return false
+  return data === true
+}

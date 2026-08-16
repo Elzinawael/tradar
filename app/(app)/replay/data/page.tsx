@@ -3,21 +3,47 @@ import { PageHeader } from "@/components/page-header"
 import { CandleImport } from "@/components/replay/candle-import"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { getCandleCatalog } from "@/lib/data"
+import { ShieldAlert } from "lucide-react"
+import { getCandleCatalog, getIsAdmin } from "@/lib/data"
 
 export const metadata: Metadata = { title: "Market data" }
 
 export default async function MarketDataPage() {
-  const catalog = await getCandleCatalog()
+  const [catalog, isAdmin] = await Promise.all([
+    getCandleCatalog(),
+    getIsAdmin(),
+  ])
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Market data"
-        description="Historical candles available for replay. Stored once and shared across your replays."
+        description="Historical candles available for replay. Shared across every replay on this instance."
       />
 
-      <CandleImport />
+      {isAdmin ? (
+        <CandleImport />
+      ) : (
+        /*
+          Presentation only. The database rejects import_candles() for
+          non-administrators, so this panel explains the restriction rather
+          than enforcing it.
+        */
+        <Card>
+          <CardContent className="flex items-start gap-3 pt-6">
+            <ShieldAlert className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium">
+                Market data is managed by an administrator
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Candles are shared by everyone on this instance, so importing
+                them is restricted. You can replay any data listed below.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {catalog.length > 0 && (
         <Card>
