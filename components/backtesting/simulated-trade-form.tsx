@@ -21,6 +21,7 @@ import {
   initialBacktestState,
   type BacktestActionState,
 } from "@/lib/actions/state"
+import { MARKET_SESSIONS, SETUP_GRADES } from "@/lib/classification"
 import type { SimulatedTrade, Strategy } from "@/lib/types"
 
 /** ISO timestamp -> the value format datetime-local expects. */
@@ -234,6 +235,43 @@ export function SimulatedTradeForm({
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="setup">Setup</Label>
+              <Select name="setup" defaultValue={trade?.setup ?? "none"}>
+                <SelectTrigger id="setup">
+                  <SelectValue placeholder="Not graded" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not graded</SelectItem>
+                  {SETUP_GRADES.map((g) => (
+                    <SelectItem key={g} value={g}>
+                      {g}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="marketSession">Market session</Label>
+              <Select
+                name="marketSession"
+                defaultValue={trade?.marketSession ?? "none"}
+              >
+                <SelectTrigger id="marketSession">
+                  <SelectValue placeholder="Not set" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not set</SelectItem>
+                  {MARKET_SESSIONS.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex flex-col gap-2">
               <Label htmlFor="tags">Tags</Label>
               <Input

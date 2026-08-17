@@ -546,7 +546,7 @@ const BACKTEST_SESSION_COLUMNS =
   "id, name, symbol, timeframe, strategy_id, initial_balance, risk_per_trade, created_at, updated_at, notes, status, net_pnl, trade_count"
 
 const BACKTEST_TRADE_COLUMNS =
-  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, origin, strategies(name)"
+  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, origin, setup, market_session, strategies(name)"
 
 function mapSimulatedTrade(row: Row): SimulatedTrade {
   const strategy = row.strategies as Row | null | undefined
@@ -571,6 +571,8 @@ function mapSimulatedTrade(row: Row): SimulatedTrade {
     tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
     notes: str(row.notes),
     origin: str(row.origin, "manual") === "replay" ? "replay" : "manual",
+    setup: strOrNull(row.setup),
+    marketSession: strOrNull(row.market_session),
   }
 }
 
@@ -610,6 +612,8 @@ export interface SimulatedTradeQuery {
   direction?: string
   status?: string
   strategyId?: string
+  setup?: string
+  marketSession?: string
   from?: string
   to?: string
 }
@@ -632,6 +636,8 @@ export async function getSimulatedTrades(
   if (query.direction) q = q.eq("direction", query.direction)
   if (query.status) q = q.eq("status", query.status)
   if (query.strategyId) q = q.eq("strategy_id", query.strategyId)
+  if (query.setup) q = q.eq("setup", query.setup)
+  if (query.marketSession) q = q.eq("market_session", query.marketSession)
   if (query.from) q = q.gte("opened_at", query.from)
   if (query.to) q = q.lte("opened_at", query.to)
 

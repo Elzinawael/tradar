@@ -12,10 +12,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { MARKET_SESSIONS, SETUP_GRADES } from "@/lib/classification"
 import type { Strategy } from "@/lib/types"
 
 const ANY = "all"
-const KEYS = ["symbol", "direction", "status", "strategyId", "from", "to"]
+const KEYS = [
+  "symbol",
+  "direction",
+  "status",
+  "strategyId",
+  "setup",
+  "marketSession",
+  "from",
+  "to",
+]
 
 /** Session trade filters, stored in the URL like the live trades page. */
 export function SessionTradeFilters({ strategies }: { strategies: Strategy[] }) {
@@ -106,6 +116,40 @@ export function SessionTradeFilters({ strategies }: { strategies: Strategy[] }) 
           </SelectContent>
         </Select>
       )}
+
+      <Select
+        value={searchParams.get("setup") ?? ANY}
+        onValueChange={(v) => setParam("setup", v)}
+      >
+        <SelectTrigger className="h-9 w-[120px]" aria-label="Filter by setup">
+          <SelectValue placeholder="Setup" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ANY}>All setups</SelectItem>
+          {SETUP_GRADES.map((g) => (
+            <SelectItem key={g} value={g}>
+              {g}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select
+        value={searchParams.get("marketSession") ?? ANY}
+        onValueChange={(v) => setParam("marketSession", v)}
+      >
+        <SelectTrigger className="h-9 w-[170px]" aria-label="Filter by market session">
+          <SelectValue placeholder="Market session" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ANY}>All sessions</SelectItem>
+          {MARKET_SESSIONS.map((m) => (
+            <SelectItem key={m} value={m}>
+              {m}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
 
       <Input
         type="date"

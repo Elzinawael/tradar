@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/empty-state"
 import { EquityCurve } from "@/components/charts/equity-curve"
 import { TradeTable } from "@/components/trades/trade-table"
 import { SessionTradeFilters } from "@/components/backtesting/session-trade-filters"
+import { PerformanceBreakdown } from "@/components/backtesting/performance-breakdown"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -68,6 +69,8 @@ export default async function BacktestSessionPage({
     direction?: string
     status?: string
     strategyId?: string
+    setup?: string
+    marketSession?: string
     from?: string
     to?: string
   }>
@@ -90,6 +93,8 @@ export default async function BacktestSessionPage({
       direction: filters.direction,
       status: filters.status,
       strategyId: filters.strategyId,
+      setup: filters.setup,
+      marketSession: filters.marketSession,
       from: bounds.from,
       to: bounds.to,
     }),
@@ -103,6 +108,8 @@ export default async function BacktestSessionPage({
       filters.direction ||
       filters.status ||
       filters.strategyId ||
+      filters.setup ||
+      filters.marketSession ||
       filters.from ||
       filters.to,
   )
@@ -326,6 +333,10 @@ export default async function BacktestSessionPage({
             </Card>
           </div>
 
+          {/* Grouped performance, computed from the unfiltered trade set by
+              the shared analytics engine. */}
+          <PerformanceBreakdown trades={allTrades} />
+
           <Suspense fallback={<div className="h-9" />}>
             <SessionTradeFilters strategies={strategies} />
           </Suspense>
@@ -335,6 +346,7 @@ export default async function BacktestSessionPage({
               trades={filteredTrades}
               sort="opened_at"
               order="asc"
+              showClassification
               buildSortHref={() => `/backtesting/sessions/${session.id}`}
               hrefFor={(trade) =>
                 `/backtesting/sessions/${session.id}/trades/${trade.id}`

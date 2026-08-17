@@ -243,3 +243,166 @@ export function computePerformanceSummary(
     tradeCount: closed.length,
   }
 }
+
+// ---------------------------------------------------------------------------
+// R-based statistics and grouping
+//
+// These extend the existing engine rather than forming a second one: every
+// monetary figure below comes from computePerformanceSummary(), so there is
+// one implementation of win rate, profit factor, P&L expectancy and drawdown.
+// Only the R-based figures are new, because the summary does not carry them.
+// ---------------------------------------------------------------------------
+
+export interface RStats {
+  /** Sum of R across closed trades that have an R-multiple. */
+  totalR: number
+  /** Mean R per trade — the R-based definition of expectancy. */
+  averageR: number | null
+  /** How many closed trades actually carry an R-multiple. */
+  tradesWithR: number
+}
+
+/**
+ * R statistics over closed trades.
+ *
+ * A trade only has an R-multiple if a stop was recorded, so trades without one
+ * are excluded from the average rather than counted as 0R — treating an
+ * unmeasurable trade as break-even would quietly drag the average toward zero.
+ */
+export function computeRStats(trades: TradeRow[]): RStats {
+  const withR = trades
+    .filter(isClosed)
+    .map((t) => t.rMultiple)
+    .filter((r): r is number => typeof r === "number" && Number.isFinite(r))
+
+  if (withR.length === 0) {
+    return { totalR: 0, averageR: null, tradesWithR: 0 }
+  }
+
+  const totalR = withR.reduce((a, b) => a + b, 0)
+
+  return {
+    totalR: Math.round(totalR * 1e4) / 1e4,
+    averageR: Math.round((totalR / withR.length) * 1e4) / 1e4,
+    tradesWithR: withR.length,
+  }
+}
+
+export interface GroupStats {
+  /** The value trades were grouped by, e.g. a strategy name or "London". */
+  key: string
+  tradeCount: number
+  wins: number
+  losses: number
+  breakevens: number
+  winRate: number | null
+  netPnl: number
+  /** Monetary expectancy: mean P&L per closed trade. */
+  averagePnl: number
+  /** R-based expectancy: mean R per closed trade with a stop. */
+  averageR: number | null
+  totalR: number
+  profitFactor: number | null
+  /**
+   * Monetary expectancy, kept distinct from averageR so the two definitions
+   * are never mixed. Equal to averagePnl by construction; exposed under the
+   * expectancy name because that is what dashboards ask for.
+   */
+  expectancyMoney: number | null
+  /**
+   * Peak-to-trough decline of this group's own equity curve, measured from a
+   * zero base. Meaningful as a relative figure for the group; it is not the
+   * account drawdown, which depends on trades outside the group.
+   */
+  maxDrawdown: number
+}
+
+/**
+ * Aggregates one set of trades into group statistics.
+ *
+ * Open trades are excluded from every realised figure — computePerformanceSummary
+ * already filters them, and the win/loss counts below use the same predicate,
+ * so an open position never contributes to performance.
+ */
+export function summarizeGroup(key: string, trades: TradeRow[]): GroupStats {
+  const closed = trades.filter(isClosed)
+  const summary = computePerformanceSummary(closed, 0)
+  const r = computeRStats(closed)
+
+  return {
+    key,
+    tradeCount: closed.length,
+    wins: closed.filter((t) => t.pnl > 0).length,
+    losses: closed.filter((t) => t.pnl < 0).length,
+    breakevens: closed.filter((t) => t.pnl === 0).length,
+    winRate: summary.winRate,
+    netPnl: summary.netPnl,
+    averagePnl: summary.averageTradePnl,
+    averageR: r.averageR,
+    totalR: r.totalR,
+    profitFactor: summary.profitFactor,
+    expectancyMoney: summary.expectancy,
+    maxDrawdown: summary.maxDrawdown,
+  }
+}
+
+/**
+ * Generic grouping. `keyFor` returns zero or more keys per trade, so a trade
+ * with several tags contributes to each of them — which is why this returns
+ * keys as an array rather than a single value.
+ *
+ * One mechanism serves strategy, setup, market session, direction and tags;
+ * there is no per-dimension copy of the aggregation.
+ */
+export function groupTrades<T extends TradeRow>(
+  trades: T[],
+  keyFor: (trade: T) => string[] | string | null,
+): Map<string, T[]> {
+  const groups = new Map<string, T[]>()
+
+  for (const trade of trades) {
+    const raw = keyFor(trade)
+    const keys =
+      raw === null ? [] : Array.isArray(raw) ? raw : [raw]
+
+    for (const key of keys) {
+      const trimmed = key.trim()
+      if (trimmed.length === 0) continue
+      const bucket = groups.get(trimmed)
+      if (bucket) bucket.push(trade)
+      else groups.set(trimmed, [trade])
+    }
+  }
+
+  return groups
+}
+
+/**
+ * Groups trades and summarises each group, sorted by net P&L descending so the
+ * best performer reads first.
+ *
+ * @param unclassifiedLabel bucket for trades with no value on this dimension;
+ *        pass null to omit them, which is right for tags (a trade with no tags
+ *        is not "untagged performance") but wrong for setup, where knowing how
+ *        ungraded trades performed is useful.
+ */
+export function summarizeBy<T extends TradeRow>(
+  trades: T[],
+  keyFor: (trade: T) => string[] | string | null,
+  unclassifiedLabel: string | null = "Unclassified",
+): GroupStats[] {
+  const resolved = (trade: T): string[] => {
+    const raw = keyFor(trade)
+    const keys = raw === null ? [] : Array.isArray(raw) ? raw : [raw]
+    const cleaned = keys.map((k) => k.trim()).filter((k) => k.length > 0)
+    if (cleaned.length > 0) return cleaned
+    return unclassifiedLabel ? [unclassifiedLabel] : []
+  }
+
+  const groups = groupTrades(trades, resolved)
+
+  return Array.from(groups.entries())
+    .map(([key, group]) => summarizeGroup(key, group))
+    .filter((g) => g.tradeCount > 0)
+    .sort((a, b) => b.netPnl - a.netPnl)
+}

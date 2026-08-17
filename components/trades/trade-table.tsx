@@ -29,6 +29,11 @@ interface TradeTableProps {
   /** Message shown when there are no rows. */
   emptyTitle?: string
   emptyDescription?: string
+  /**
+   * Adds Setup and Market session columns. Off by default so the live trades
+   * table, which has no classification, is unchanged.
+   */
+  showClassification?: boolean
 }
 
 const STATUS_TONE: Record<Trade["status"], string> = {
@@ -84,6 +89,7 @@ export function TradeTable({
   hrefFor = (trade) => `/trades/${trade.id}`,
   emptyTitle = "No trades found",
   emptyDescription = "Log your first trade, or adjust the filters to widen your search.",
+  showClassification = false,
 }: TradeTableProps) {
   if (trades.length === 0) {
     return (
@@ -116,6 +122,12 @@ export function TradeTable({
               buildSortHref={buildSortHref}
             />
             <TableHead className="hidden md:table-cell">Strategy</TableHead>
+            {showClassification && (
+              <>
+                <TableHead className="hidden lg:table-cell">Setup</TableHead>
+                <TableHead className="hidden xl:table-cell">Session</TableHead>
+              </>
+            )}
             <SortHeader
               label="Qty"
               column="quantity"
@@ -183,6 +195,24 @@ export function TradeTable({
               <TableCell className="hidden max-w-[180px] truncate text-muted-foreground md:table-cell">
                 {trade.strategyName ?? "—"}
               </TableCell>
+              {showClassification && (
+                <>
+                  <TableCell className="hidden lg:table-cell">
+                    {"setup" in trade && trade.setup ? (
+                      <Badge variant="outline" className="font-normal">
+                        {String(trade.setup)}
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="hidden max-w-[160px] truncate text-muted-foreground xl:table-cell">
+                    {"marketSession" in trade && trade.marketSession
+                      ? String(trade.marketSession)
+                      : "—"}
+                  </TableCell>
+                </>
+              )}
               <TableCell className="hidden text-right font-mono tabular-nums sm:table-cell">
                 {trade.quantity}
               </TableCell>

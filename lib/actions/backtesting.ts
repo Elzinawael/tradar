@@ -10,6 +10,10 @@ import {
   deriveTradeStatus,
 } from "@/lib/trade-math"
 import type { TradeDirection } from "@/lib/types"
+import {
+  normaliseMarketSession,
+  normaliseSetup,
+} from "@/lib/classification"
 import type { BacktestActionState } from "./state"
 
 const STATUSES = ["draft", "running", "completed"] as const
@@ -237,6 +241,10 @@ function parseSimulatedTrade(formData: FormData) {
         closedAt ? closedAt.toISOString() : null,
       ),
       strategy_id: strategyRaw && strategyRaw !== "none" ? strategyRaw : null,
+      setup: normaliseSetup(String(formData.get("setup") ?? "")) ?? null,
+      market_session:
+        normaliseMarketSession(String(formData.get("marketSession") ?? "")) ??
+        null,
       tags: String(formData.get("tags") ?? "")
         .split(",")
         .map((t) => t.trim())

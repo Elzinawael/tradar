@@ -12,6 +12,12 @@ import {
   deriveTradeStatus,
 } from "@/lib/trade-math"
 import { findExit, validateLevels } from "@/lib/replay-engine"
+import {
+  MAX_NOTES_LENGTH,
+  normaliseMarketSession,
+  normaliseSetup,
+  normaliseTags,
+} from "@/lib/classification"
 import type { TradeDirection } from "@/lib/types"
 import type { BacktestActionState } from "./state"
 
@@ -262,6 +268,34 @@ export async function openReplayPosition(
   const stopPrice = numberOrNull("stopPrice")
   const takeProfit = numberOrNull("takeProfit")
 
+  // --- classification -----------------------------------------------------
+  // Validated server-side. strategy_id is additionally checked against the
+  // caller by assert_owns_backtest_related(), so a forged id is rejected by the
+  // database even if this code changed.
+  const setup = normaliseSetup(String(formData.get("setup") ?? ""))
+  if (setup === undefined) {
+    return {
+      error: "Please correct the highlighted fields.",
+      fieldErrors: { setup: "Setup is too long." },
+    }
+  }
+
+  const marketSession = normaliseMarketSession(
+    String(formData.get("marketSession") ?? ""),
+  )
+  if (marketSession === undefined) {
+    return {
+      error: "Please correct the highlighted fields.",
+      fieldErrors: { marketSession: "Market session is too long." },
+    }
+  }
+
+  const tags = normaliseTags(String(formData.get("tags") ?? ""))
+
+  const strategyRaw = String(formData.get("strategyId") ?? "").trim()
+  const strategyId =
+    strategyRaw && strategyRaw !== "none" ? strategyRaw : null
+
   // Entry is the close of the bar at the cursor — never taken from the client.
   const { data: entryCandle } = await supabase
     .from("candles")
@@ -340,7 +374,13 @@ export async function openReplayPosition(
     duration_minutes: null,
     entry_candle_ts: openedAt,
     exit_candle_ts: null,
-    notes: String(formData.get("notes") ?? "").trim().slice(0, 5000),
+    strategy_id: strategyId,
+    setup,
+    market_session: marketSession,
+    tags,
+    notes: String(formData.get("notes") ?? "")
+      .trim()
+      .slice(0, MAX_NOTES_LENGTH),
   })
 
   if (error) {

@@ -115,6 +115,13 @@ export interface SimulatedTrade extends TradeRow {
   notes: string
   /** Whether the trade was hand-entered or produced by the replay engine. */
   origin: "manual" | "replay"
+  /** Setup grade, e.g. "A+". Null when the trade was not classified. */
+  setup: string | null
+  /**
+   * The trading period the trade occurred in, e.g. "London".
+   * Distinct from the backtest session, which is the simulation container.
+   */
+  marketSession: string | null
 }
 
 export interface ProgressRule {

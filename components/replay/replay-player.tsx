@@ -16,6 +16,7 @@ import {
 import { ReplayChart } from "./replay-chart"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -37,7 +38,12 @@ import {
 } from "@/lib/actions/replay"
 import { initialBacktestState } from "@/lib/actions/state"
 import { cn, formatCurrency } from "@/lib/utils"
-import type { ReplaySession, SimulatedTrade } from "@/lib/types"
+import {
+  MARKET_SESSIONS,
+  SETUP_GRADES,
+  SUGGESTED_TAGS,
+} from "@/lib/classification"
+import type { ReplaySession, SimulatedTrade, Strategy } from "@/lib/types"
 
 const SPEEDS = [0.5, 1, 2, 5, 10, 25]
 
@@ -54,6 +60,8 @@ interface ReplayPlayerProps {
   riskPercent: number
   /** The currently open position, or null when flat. */
   openPosition: SimulatedTrade | null
+  /** The user's strategies, for classifying the trade before opening it. */
+  strategies: Strategy[]
 }
 
 export function ReplayPlayer({
@@ -62,6 +70,7 @@ export function ReplayPlayer({
   balance,
   riskPercent,
   openPosition,
+  strategies,
 }: ReplayPlayerProps) {
   const router = useRouter()
   const [cursorTs, setCursorTs] = useState(replay.cursorTs)
@@ -138,6 +147,19 @@ export function ReplayPlayer({
   const [direction, setDirection] = useState<"long" | "short">("long")
   const [stopPrice, setStopPrice] = useState("")
   const [takeProfit, setTakeProfit] = useState("")
+  const [tags, setTags] = useState("")
+
+  /** Appends a suggested tag, skipping one that is already present. */
+  const addTag = useCallback((tag: string) => {
+    setTags((prev) => {
+      const existing = prev
+        .split(",")
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean)
+      if (existing.includes(tag.toLowerCase())) return prev
+      return prev.trim() === "" ? tag : `${prev.replace(/,\s*$/, "")}, ${tag}`
+    })
+  }, [])
 
   // The price at the server-authoritative cursor. Used for display and for
   // marking the open position to market; the server recomputes it from the
@@ -195,6 +217,7 @@ export function ReplayPlayer({
       } else {
         setStopPrice("")
         setTakeProfit("")
+        setTags("")
         setNotice("Position opened. Advance the replay to see how it resolves.")
         router.refresh()
       }
@@ -509,6 +532,109 @@ export function ReplayPlayer({
                     </p>
                   )}
                 </div>
+              </div>
+
+              {/* Classification. Optional — a trader should not be forced to
+                  grade every trade — but recorded before the position opens so
+                  the analytics breakdown has something to group by. */}
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="strategyId" className="text-xs">
+                    Strategy
+                  </Label>
+                  <Select name="strategyId" defaultValue="none">
+                    <SelectTrigger id="strategyId" className="h-9">
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No strategy</SelectItem>
+                      {strategies.map((st) => (
+                        <SelectItem key={st.id} value={st.id}>
+                          {st.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="setup" className="text-xs">
+                    Setup
+                  </Label>
+                  <Select name="setup" defaultValue="none">
+                    <SelectTrigger id="setup" className="h-9">
+                      <SelectValue placeholder="Not graded" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not graded</SelectItem>
+                      {SETUP_GRADES.map((g) => (
+                        <SelectItem key={g} value={g}>
+                          {g}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="marketSession" className="text-xs">
+                    Market session
+                  </Label>
+                  <Select name="marketSession" defaultValue="none">
+                    <SelectTrigger id="marketSession" className="h-9">
+                      <SelectValue placeholder="Not set" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      {MARKET_SESSIONS.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="tags" className="text-xs">
+                    Tags
+                  </Label>
+                  <Input
+                    id="tags"
+                    name="tags"
+                    value={tags}
+                    onChange={(e) => setTags(e.target.value)}
+                    placeholder="FVG, liquidity sweep"
+                    className="h-9"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-1">
+                {SUGGESTED_TAGS.map((tag) => (
+                  <Button
+                    key={tag}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs font-normal"
+                    onClick={() => addTag(tag)}
+                  >
+                    + {tag}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="notes" className="text-xs">
+                  Notes
+                </Label>
+                <Textarea
+                  id="notes"
+                  name="notes"
+                  rows={2}
+                  placeholder="4H bias bearish, 15M FVG, liquidity sweep before entry."
+                />
               </div>
 
               <div className="flex flex-wrap items-center gap-4 rounded-md border border-border bg-muted/20 p-3 text-xs">
