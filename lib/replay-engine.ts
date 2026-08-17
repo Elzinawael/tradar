@@ -26,6 +26,7 @@
  * with the conservative rule above.
  */
 
+import { computeRMultiple, computeTradePnl } from "./trade-math"
 import type { TradeDirection } from "./types"
 import type { Candle } from "./candles"
 
@@ -153,4 +154,74 @@ export function validateLevels(params: {
   }
 
   return errors
+}
+
+/**
+ * Mark-to-market state of an open position.
+ *
+ * Deliberately delegates to the same helpers a closed trade uses: the
+ * unrealized figure is simply what the P&L would be if the position closed at
+ * the current price. There is no second formula to drift out of step.
+ */
+export interface UnrealizedState {
+  /** P&L if closed at the current price. */
+  pnl: number
+  /** Cash at risk when the position was opened: |entry - stop| x quantity. */
+  riskAmount: number | null
+  /** Unrealized P&L expressed in units of the ORIGINAL risk. */
+  rMultiple: number | null
+}
+
+/**
+ * Values an open position at a price.
+ *
+ * `riskAmount` is computed from the entry and stop recorded when the position
+ * was opened, never from current equity — R must stay comparable across a
+ * session even as the balance moves, otherwise the same trade would report a
+ * different R depending on when you looked at it.
+ */
+export function computeUnrealized(params: {
+  direction: TradeDirection
+  entryPrice: number
+  stopPrice: number | null
+  quantity: number
+  currentPrice: number
+  fees?: number
+}): UnrealizedState {
+  const { direction, entryPrice, stopPrice, quantity, currentPrice, fees = 0 } =
+    params
+
+  // Same helper as a realised close, with the current price as the exit.
+  const pnl =
+    computeTradePnl({
+      direction,
+      entryPrice,
+      exitPrice: currentPrice,
+      quantity,
+      fees,
+    }) ?? 0
+
+  const riskPerUnit =
+    stopPrice === null
+      ? null
+      : direction === "long"
+        ? entryPrice - stopPrice
+        : stopPrice - entryPrice
+
+  const riskAmount =
+    riskPerUnit !== null && riskPerUnit > 0
+      ? Math.round(riskPerUnit * quantity * 100) / 100
+      : null
+
+  return {
+    pnl,
+    riskAmount,
+    rMultiple: computeRMultiple({
+      direction,
+      entryPrice,
+      stopPrice,
+      quantity,
+      pnl,
+    }),
+  }
 }

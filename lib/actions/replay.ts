@@ -24,6 +24,10 @@ import type { BacktestActionState } from "./state"
  * the historical window even by a forged request.
  */
 
+/** Shown whenever a replay already has a live position. */
+const POSITION_ALREADY_OPEN =
+  "Close the current position before opening a new trade."
+
 export async function createReplaySession(
   _prev: BacktestActionState,
   formData: FormData,
@@ -224,6 +228,11 @@ export async function openReplayPosition(
 
   // One position at a time keeps the simulator honest: a stop is sized against
   // session equity, and stacking positions would silently multiply the risk.
+  //
+  // This is a fast path for a clear error message. It is NOT the guarantee —
+  // a check followed by an insert is a race, and two requests arriving
+  // together would both pass it. The partial unique index added in 0008 is the
+  // actual authority, and the insert below handles its violation.
   const { count: openCount } = await supabase
     .from("backtest_trades")
     .select("id", { count: "exact", head: true })
@@ -231,10 +240,7 @@ export async function openReplayPosition(
     .eq("status", "open")
 
   if ((openCount ?? 0) > 0) {
-    return {
-      error: "A position is already open. Close it before opening another.",
-      fieldErrors: {},
-    }
+    return { error: POSITION_ALREADY_OPEN, fieldErrors: {} }
   }
 
   const directionRaw = String(formData.get("direction") ?? "").trim()
@@ -337,7 +343,15 @@ export async function openReplayPosition(
     notes: String(formData.get("notes") ?? "").trim().slice(0, 5000),
   })
 
-  if (error) return { error: error.message, fieldErrors: {} }
+  if (error) {
+    // 23505 = unique_violation. Raised by the partial unique index when a
+    // concurrent request opened a position first, so the second caller gets
+    // the same message as the fast path rather than a database error.
+    if (error.code === "23505") {
+      return { error: POSITION_ALREADY_OPEN, fieldErrors: {} }
+    }
+    return { error: error.message, fieldErrors: {} }
+  }
 
   revalidatePath(`/replay/${replayId}`)
   revalidatePath(`/backtesting/sessions/${replay.session_id}`)

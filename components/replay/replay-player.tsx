@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/select"
 import { visibleCandles, type Candle } from "@/lib/candles"
 import { computePositionSize } from "@/lib/trade-math"
-import { validateLevels } from "@/lib/replay-engine"
+import { computeUnrealized, validateLevels } from "@/lib/replay-engine"
 import {
   advanceReplay,
   closeReplayPosition,
@@ -138,6 +138,22 @@ export function ReplayPlayer({
   const [direction, setDirection] = useState<"long" | "short">("long")
   const [stopPrice, setStopPrice] = useState("")
   const [takeProfit, setTakeProfit] = useState("")
+
+  // The price at the server-authoritative cursor. Used for display and for
+  // marking the open position to market; the server recomputes it from the
+  // same candle when the position actually closes.
+  const currentPrice = current?.close ?? null
+
+  const unrealized = useMemo(() => {
+    if (!openPosition || currentPrice === null) return null
+    return computeUnrealized({
+      direction: openPosition.direction,
+      entryPrice: openPosition.entryPrice,
+      stopPrice: openPosition.stopPrice,
+      quantity: openPosition.quantity,
+      currentPrice,
+    })
+  }, [openPosition, currentPrice])
 
   const entryPrice = current?.close ?? null
   const stop = stopPrice.trim() === "" ? null : Number(stopPrice)
@@ -293,25 +309,29 @@ export function ReplayPlayer({
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-              Open position
-              <Badge
-                variant="outline"
+              <span
                 className={cn(
-                  "capitalize",
+                  "uppercase tracking-wide",
                   openPosition.direction === "long"
-                    ? "border-positive/30 bg-positive/10 text-positive"
-                    : "border-negative/30 bg-negative/10 text-negative",
+                    ? "text-positive"
+                    : "text-negative",
                 )}
               >
-                {openPosition.direction}
-              </Badge>
+                Open {openPosition.direction}
+              </span>
+              <span className="text-muted-foreground">{openPosition.symbol}</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
               {[
-                ["Symbol", openPosition.symbol],
                 ["Entry", String(openPosition.entryPrice)],
+                [
+                  "Current",
+                  /* From the bar at the server-side cursor, not a browser
+                     quote — the client has no authoritative price. */
+                  currentPrice === null ? "—" : String(currentPrice),
+                ],
                 ["Stop", openPosition.stopPrice ?? "—"],
                 ["Target", openPosition.takeProfit ?? "—"],
                 ["Size", String(openPosition.quantity)],
@@ -325,18 +345,81 @@ export function ReplayPlayer({
               ))}
             </dl>
 
+            <dl className="grid grid-cols-2 gap-4 border-t border-border pt-4 sm:grid-cols-4">
+              <div>
+                <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Unrealized P&L
+                </dt>
+                <dd
+                  className={cn(
+                    "font-mono text-sm tabular-nums",
+                    unrealized && unrealized.pnl > 0 && "text-positive",
+                    unrealized && unrealized.pnl < 0 && "text-negative",
+                  )}
+                >
+                  {unrealized
+                    ? formatCurrency(unrealized.pnl, { signed: true })
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Current R
+                </dt>
+                <dd
+                  className={cn(
+                    "font-mono text-sm tabular-nums",
+                    unrealized?.rMultiple != null &&
+                      unrealized.rMultiple > 0 &&
+                      "text-positive",
+                    unrealized?.rMultiple != null &&
+                      unrealized.rMultiple < 0 &&
+                      "text-negative",
+                  )}
+                >
+                  {unrealized?.rMultiple == null
+                    ? "—"
+                    : `${unrealized.rMultiple > 0 ? "+" : ""}${unrealized.rMultiple.toFixed(2)}R`}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Risk
+                </dt>
+                <dd className="font-mono text-sm tabular-nums">
+                  {unrealized?.riskAmount == null
+                    ? "—"
+                    : formatCurrency(unrealized.riskAmount)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Equity
+                </dt>
+                <dd className="font-mono text-sm tabular-nums">
+                  {unrealized
+                    ? formatCurrency(balance + unrealized.pnl)
+                    : formatCurrency(balance)}
+                </dd>
+                <dd className="text-[10px] text-muted-foreground">
+                  balance {formatCurrency(balance)}
+                </dd>
+              </div>
+            </dl>
+
             <p className="text-xs text-muted-foreground">
-              The replay engine closes this position automatically when a candle
-              reaches the stop or the target. If a single candle touches both,
-              the stop is taken — a bar records only its high and low, not the
-              order they occurred in, so the ambiguous case always resolves
-              against you rather than being guessed.
+              Unrealized figures are marked to the current candle and are not
+              part of realised session statistics until the position closes.
+              The engine closes it automatically when a candle reaches the stop
+              or the target; if one candle touches both, the stop is taken,
+              because a bar records only its high and low, never the order they
+              occurred in.
             </p>
 
             <form action={closeReplayPosition}>
               <input type="hidden" name="replayId" value={replay.id} />
               <Button type="submit" variant="outline" size="sm">
-                Close at current candle
+                Close position
               </Button>
             </form>
           </CardContent>
