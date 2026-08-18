@@ -34,6 +34,11 @@ interface TradeTableProps {
    * table, which has no classification, is unchanged.
    */
   showClassification?: boolean
+  /**
+   * Adds Entry, Exit, Stop and Target columns for simulated/replay trades.
+   * Off by default, so the live trades table keeps its existing shape.
+   */
+  showLevels?: boolean
 }
 
 const STATUS_TONE: Record<Trade["status"], string> = {
@@ -90,6 +95,7 @@ export function TradeTable({
   emptyTitle = "No trades found",
   emptyDescription = "Log your first trade, or adjust the filters to widen your search.",
   showClassification = false,
+  showLevels = false,
 }: TradeTableProps) {
   if (trades.length === 0) {
     return (
@@ -114,6 +120,14 @@ export function TradeTable({
               buildSortHref={buildSortHref}
             />
             <TableHead>Side</TableHead>
+            {showLevels && (
+              <>
+                <TableHead className="text-right">Entry</TableHead>
+                <TableHead className="text-right">Exit</TableHead>
+                <TableHead className="hidden text-right md:table-cell">SL</TableHead>
+                <TableHead className="hidden text-right md:table-cell">TP</TableHead>
+              </>
+            )}
             <SortHeader
               label="Opened"
               column="opened_at"
@@ -185,6 +199,33 @@ export function TradeTable({
                   {trade.direction}
                 </span>
               </TableCell>
+              {showLevels && (
+                <>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {trade.entryPrice}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {/* An open trade has no exit yet, and none is invented. */}
+                    {trade.exitPrice ?? (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="hidden text-right font-mono tabular-nums md:table-cell">
+                    {"stopPrice" in trade && trade.stopPrice !== null ? (
+                      String(trade.stopPrice)
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="hidden text-right font-mono tabular-nums md:table-cell">
+                    {"takeProfit" in trade && trade.takeProfit !== null ? (
+                      String(trade.takeProfit)
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                </>
+              )}
               <TableCell className="whitespace-nowrap text-muted-foreground">
                 {new Date(trade.openedAt).toLocaleDateString("en-US", {
                   month: "short",
@@ -220,7 +261,11 @@ export function TradeTable({
                 {formatDuration(trade.durationMinutes)}
               </TableCell>
               <TableCell className="hidden text-right font-mono tabular-nums lg:table-cell">
-                {trade.rMultiple === null ? "—" : `${trade.rMultiple.toFixed(2)}R`}
+                {/* Realised R only. An open trade shows a dash rather than an
+                    unrealized figure, so the column never mixes the two. */}
+                {trade.status === "open" || trade.rMultiple === null
+                  ? "—"
+                  : `${trade.rMultiple.toFixed(2)}R`}
               </TableCell>
               <TableCell>
                 <Badge

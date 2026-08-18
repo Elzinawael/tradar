@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/page-header"
 import { MetricCard } from "@/components/metric-card"
 import { ReplayPlayer } from "@/components/replay/replay-player"
 import { TradeTable } from "@/components/trades/trade-table"
+import { ReplayPerformance } from "@/components/replay/replay-performance"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
@@ -56,7 +57,9 @@ export default async function ReplayDetailPage({
   const balance = summary.accountBalance || session.initialBalance
   const riskPercent = session.riskPerTrade > 0 ? session.riskPerTrade : 1
 
-  const replayTrades = trades.filter((t) => t.sessionId === session.id)
+  // Trades produced by THIS replay, for chart markers and the trade history.
+  // Manual trades in the same session are excluded — they have no bars here.
+  const replayTrades = trades.filter((t) => t.replayId === replay.id)
 
   return (
     <div className="space-y-6">
@@ -138,11 +141,18 @@ export default async function ReplayDetailPage({
           riskPercent={riskPercent}
           openPosition={openPosition}
           strategies={strategies}
+          replayTrades={replayTrades}
         />
       )}
 
+      {/* Realised performance + equity curve. Session-wide, so a manual trade
+          in the same session is included in the statistics even though it has
+          no marker on this chart. */}
+      <ReplayPerformance trades={trades} startingBalance={session.initialBalance} />
+
       <Card className="p-0">
         <TradeTable
+          showLevels
           trades={replayTrades}
           sort="opened_at"
           order="asc"

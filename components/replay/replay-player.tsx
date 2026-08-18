@@ -8,12 +8,18 @@ import {
   Loader2,
   Pause,
   Play,
+  Check,
   RotateCcw,
   Target,
   TrendingDown,
   TrendingUp,
+  X,
 } from "lucide-react"
-import { ReplayChart } from "./replay-chart"
+import {
+  ReplayChart,
+  type ChartLevel,
+  type ChartMarker,
+} from "./replay-chart"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -62,6 +68,11 @@ interface ReplayPlayerProps {
   openPosition: SimulatedTrade | null
   /** The user's strategies, for classifying the trade before opening it. */
   strategies: Strategy[]
+  /**
+   * Closed trades belonging to this replay, used to mark executions on the
+   * chart. Timestamps and prices come from the database, never recomputed here.
+   */
+  replayTrades: SimulatedTrade[]
 }
 
 export function ReplayPlayer({
@@ -71,6 +82,7 @@ export function ReplayPlayer({
   riskPercent,
   openPosition,
   strategies,
+  replayTrades,
 }: ReplayPlayerProps) {
   const router = useRouter()
   const [cursorTs, setCursorTs] = useState(replay.cursorTs)
@@ -166,6 +178,90 @@ export function ReplayPlayer({
   // same candle when the position actually closes.
   const currentPrice = current?.close ?? null
 
+  /**
+   * Open-position levels for the chart. Returns an empty array when flat, which
+   * is what makes the lines disappear the moment a position closes.
+   */
+  const chartLevels = useMemo<ChartLevel[]>(() => {
+    const levels: ChartLevel[] = []
+    if (currentPrice !== null) {
+      levels.push({ price: currentPrice, label: "Price", kind: "current" })
+    }
+    if (!openPosition) return levels
+
+    levels.push({
+      price: openPosition.entryPrice,
+      label: `Entry ${openPosition.direction === "long" ? "L" : "S"}`,
+      kind: "entry",
+    })
+    if (openPosition.stopPrice !== null) {
+      levels.push({ price: openPosition.stopPrice, label: "SL", kind: "stop" })
+    }
+    if (openPosition.takeProfit !== null) {
+      levels.push({ price: openPosition.takeProfit, label: "TP", kind: "target" })
+    }
+    return levels
+  }, [openPosition, currentPrice])
+
+  /**
+   * Entry and exit markers, built from stored entry_candle_ts / exit_candle_ts
+   * and the stored status. Nothing is inferred: a trade with no recorded exit
+   * candle simply gets no exit marker.
+   */
+  const chartMarkers = useMemo<ChartMarker[]>(() => {
+    const marks: ChartMarker[] = []
+
+    const addEntry = (trade: SimulatedTrade) => {
+      marks.push({
+        ts: trade.openedAt,
+        kind: trade.direction === "long" ? "entry-long" : "entry-short",
+        label: trade.direction === "long" ? "L" : "S",
+      })
+    }
+
+    if (openPosition) addEntry(openPosition)
+
+    for (const trade of replayTrades) {
+      if (trade.status === "open") continue
+      addEntry(trade)
+      if (!trade.closedAt) continue
+
+      // Which level closed it is inferred only from the recorded exit price
+      // matching a recorded level — never guessed from the candle.
+      const hitStop =
+        trade.stopPrice !== null && trade.exitPrice === trade.stopPrice
+      const hitTarget =
+        trade.takeProfit !== null && trade.exitPrice === trade.takeProfit
+
+      marks.push({
+        ts: trade.closedAt,
+        kind: hitStop
+          ? "exit-stop"
+          : hitTarget
+            ? "exit-target"
+            : "exit-manual",
+        label: hitStop ? "SL" : hitTarget ? "TP" : "C",
+      })
+    }
+
+    return marks
+  }, [openPosition, replayTrades])
+
+  /**
+   * The most recently closed trade in this replay, for the result banner. Read
+   * from stored data, so a refresh still shows the outcome.
+   */
+  const lastClosed = useMemo(() => {
+    const closed = replayTrades
+      .filter((t) => t.status !== "open" && t.closedAt)
+      .sort(
+        (a, b) =>
+          new Date(b.closedAt as string).getTime() -
+          new Date(a.closedAt as string).getTime(),
+      )
+    return closed[0] ?? null
+  }, [replayTrades])
+
   const unrealized = useMemo(() => {
     if (!openPosition || currentPrice === null) return null
     return computeUnrealized({
@@ -230,7 +326,11 @@ export function ReplayPlayer({
     <div className="space-y-4">
       <Card className="p-0">
         <CardContent className="p-0">
-          <ReplayChart candles={visible} />
+          <ReplayChart
+            candles={visible}
+            levels={chartLevels}
+            markers={chartMarkers}
+          />
         </CardContent>
       </Card>
 
@@ -311,6 +411,74 @@ export function ReplayPlayer({
           </div>
         </CardContent>
       </Card>
+
+      {/* Result banner, built from the STORED trade result so it survives a
+          refresh and cannot show a browser-computed outcome. */}
+      {lastClosed && (
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-x-6 gap-y-1 rounded-md border p-3",
+            lastClosed.pnl > 0
+              ? "border-positive/30 bg-positive/10"
+              : lastClosed.pnl < 0
+                ? "border-negative/30 bg-negative/10"
+                : "border-border bg-muted/30",
+          )}
+        >
+          <span
+            className={cn(
+              "flex items-center gap-2 text-sm font-semibold uppercase tracking-wide",
+              lastClosed.pnl > 0
+                ? "text-positive"
+                : lastClosed.pnl < 0
+                  ? "text-negative"
+                  : "text-muted-foreground",
+            )}
+          >
+            {lastClosed.pnl > 0 ? (
+              <Check className="size-4" />
+            ) : lastClosed.pnl < 0 ? (
+              <X className="size-4" />
+            ) : null}
+            {lastClosed.stopPrice !== null &&
+            lastClosed.exitPrice === lastClosed.stopPrice
+              ? "Stop loss hit"
+              : lastClosed.takeProfit !== null &&
+                  lastClosed.exitPrice === lastClosed.takeProfit
+                ? "Take profit hit"
+                : "Position closed"}
+          </span>
+          <span
+            className={cn(
+              "font-mono text-sm tabular-nums",
+              lastClosed.pnl > 0
+                ? "text-positive"
+                : lastClosed.pnl < 0
+                  ? "text-negative"
+                  : "text-muted-foreground",
+            )}
+          >
+            {lastClosed.rMultiple === null
+              ? "—"
+              : `${lastClosed.rMultiple > 0 ? "+" : ""}${lastClosed.rMultiple.toFixed(2)}R`}
+          </span>
+          <span
+            className={cn(
+              "font-mono text-sm tabular-nums",
+              lastClosed.pnl > 0
+                ? "text-positive"
+                : lastClosed.pnl < 0
+                  ? "text-negative"
+                  : "text-muted-foreground",
+            )}
+          >
+            {formatCurrency(lastClosed.pnl, { signed: true })}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            exit {lastClosed.exitPrice ?? "—"}
+          </span>
+        </div>
+      )}
 
       {notice && (
         <div className="rounded-md border border-primary/30 bg-primary/10 p-3 text-sm text-primary">
@@ -450,7 +618,12 @@ export function ReplayPlayer({
       ) : (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Place a trade</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+              Place a trade
+              <span className="text-xs font-normal uppercase tracking-wide text-muted-foreground">
+                no open position
+              </span>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <form action={submitOpen} className="flex flex-col gap-4">

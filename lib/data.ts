@@ -546,7 +546,7 @@ const BACKTEST_SESSION_COLUMNS =
   "id, name, symbol, timeframe, strategy_id, initial_balance, risk_per_trade, created_at, updated_at, notes, status, net_pnl, trade_count"
 
 const BACKTEST_TRADE_COLUMNS =
-  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, origin, setup, market_session, strategies(name)"
+  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, origin, replay_id, setup, market_session, strategies(name)"
 
 function mapSimulatedTrade(row: Row): SimulatedTrade {
   const strategy = row.strategies as Row | null | undefined
@@ -571,6 +571,7 @@ function mapSimulatedTrade(row: Row): SimulatedTrade {
     tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
     notes: str(row.notes),
     origin: str(row.origin, "manual") === "replay" ? "replay" : "manual",
+    replayId: strOrNull(row.replay_id),
     setup: strOrNull(row.setup),
     marketSession: strOrNull(row.market_session),
   }

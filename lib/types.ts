@@ -115,6 +115,8 @@ export interface SimulatedTrade extends TradeRow {
   notes: string
   /** Whether the trade was hand-entered or produced by the replay engine. */
   origin: "manual" | "replay"
+  /** The replay that produced this trade, or null for a hand-entered one. */
+  replayId: string | null
   /** Setup grade, e.g. "A+". Null when the trade was not classified. */
   setup: string | null
   /**
