@@ -22,7 +22,13 @@ import type { Candle } from "@/lib/candles"
 export interface ChartLevel {
   price: number
   label: string
-  kind: "entry" | "stop" | "target" | "current"
+  kind:
+    | "entry"
+    | "stop"
+    | "target"
+    | "current"
+    /** A resting order that has not filled — styled distinctly from a position. */
+    | "pending"
 }
 
 /** An execution to mark on the candle it occurred on. */
@@ -164,6 +170,9 @@ export function ReplayChart({
           return { color: "#22c55e", lineStyle: LineStyle.Dashed }
         case "current":
           return { color: "#8b8b8b", lineStyle: LineStyle.Dotted }
+        case "pending":
+          // Sparse dots distinguish an unfilled order from a live entry.
+          return { color: "#60a5fa", lineStyle: LineStyle.SparseDotted }
         default:
           return { color: "#d4a437", lineStyle: LineStyle.Solid }
       }

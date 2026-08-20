@@ -25,6 +25,7 @@ import {
 import type {
   BacktestSession,
   Profile,
+  ReplayOrder,
   ReplaySession,
   SimulatedTrade,
   DailyPnl,
@@ -546,7 +547,7 @@ const BACKTEST_SESSION_COLUMNS =
   "id, name, symbol, timeframe, strategy_id, initial_balance, risk_per_trade, created_at, updated_at, notes, status, net_pnl, trade_count"
 
 const BACKTEST_TRADE_COLUMNS =
-  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, origin, replay_id, setup, market_session, strategies(name)"
+  "id, session_id, symbol, direction, entry_price, exit_price, stop_price, take_profit, quantity, pnl, r_multiple, strategy_id, opened_at, closed_at, duration_minutes, status, tags, notes, origin, replay_id, exit_reason, setup, market_session, strategies(name)"
 
 function mapSimulatedTrade(row: Row): SimulatedTrade {
   const strategy = row.strategies as Row | null | undefined
@@ -572,6 +573,7 @@ function mapSimulatedTrade(row: Row): SimulatedTrade {
     notes: str(row.notes),
     origin: str(row.origin, "manual") === "replay" ? "replay" : "manual",
     replayId: strOrNull(row.replay_id),
+    exitReason: strOrNull(row.exit_reason) as SimulatedTrade["exitReason"],
     setup: strOrNull(row.setup),
     marketSession: strOrNull(row.market_session),
   }
@@ -922,4 +924,62 @@ export async function getOpenReplayPosition(
 
   if (error || !data) return null
   return mapSimulatedTrade(data as Row)
+}
+
+
+const REPLAY_ORDER_COLUMNS =
+  "id, replay_id, symbol, direction, order_type, status, requested_price, stop_price, take_profit, quantity, expiry_bars, bars_elapsed, fill_price, filled_at, cancelled_at, created_at"
+
+function mapReplayOrder(row: Row): ReplayOrder {
+  return {
+    id: str(row.id),
+    replayId: str(row.replay_id),
+    symbol: str(row.symbol),
+    direction: str(row.direction, "long") as TradeDirection,
+    orderType: str(row.order_type, "market") as ReplayOrder["orderType"],
+    status: str(row.status, "pending") as ReplayOrder["status"],
+    requestedPrice: numOrNull(row.requested_price),
+    stopPrice: numOrNull(row.stop_price),
+    takeProfit: numOrNull(row.take_profit),
+    quantity: num(row.quantity),
+    expiryBars: numOrNull(row.expiry_bars),
+    barsElapsed: num(row.bars_elapsed),
+    fillPrice: numOrNull(row.fill_price),
+    filledAt: strOrNull(row.filled_at),
+    cancelledAt: strOrNull(row.cancelled_at),
+    createdAt: str(row.created_at),
+  }
+}
+
+/** All orders for a replay, newest first. */
+export async function getReplayOrders(replayId: string): Promise<ReplayOrder[]> {
+  const supabase = await createClient()
+  if (!supabase) return []
+
+  const { data, error } = await supabase
+    .from("replay_orders")
+    .select(REPLAY_ORDER_COLUMNS)
+    .eq("replay_id", replayId)
+    .order("created_at", { ascending: false })
+
+  if (error || !data) return []
+  return (data as Row[]).map(mapReplayOrder)
+}
+
+/** The resting order for a replay, or null when there is none. */
+export async function getPendingReplayOrder(
+  replayId: string,
+): Promise<ReplayOrder | null> {
+  const supabase = await createClient()
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("replay_orders")
+    .select(REPLAY_ORDER_COLUMNS)
+    .eq("replay_id", replayId)
+    .eq("status", "pending")
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapReplayOrder(data as Row)
 }

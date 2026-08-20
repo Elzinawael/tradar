@@ -35,11 +35,16 @@ import {
 } from "@/components/ui/select"
 import { visibleCandles, type Candle } from "@/lib/candles"
 import { computePositionSize } from "@/lib/trade-math"
-import { computeUnrealized, validateLevels } from "@/lib/replay-engine"
+import {
+  computeUnrealized,
+  validateOrderLevels,
+  type OrderType,
+} from "@/lib/replay-engine"
 import {
   advanceReplay,
+  cancelReplayOrder,
   closeReplayPosition,
-  openReplayPosition,
+  placeReplayOrder,
   resetReplay,
 } from "@/lib/actions/replay"
 import { initialBacktestState } from "@/lib/actions/state"
@@ -49,7 +54,12 @@ import {
   SETUP_GRADES,
   SUGGESTED_TAGS,
 } from "@/lib/classification"
-import type { ReplaySession, SimulatedTrade, Strategy } from "@/lib/types"
+import type {
+  ReplayOrder,
+  ReplaySession,
+  SimulatedTrade,
+  Strategy,
+} from "@/lib/types"
 
 const SPEEDS = [0.5, 1, 2, 5, 10, 25]
 
@@ -73,6 +83,8 @@ interface ReplayPlayerProps {
    * chart. Timestamps and prices come from the database, never recomputed here.
    */
   replayTrades: SimulatedTrade[]
+  /** The resting order for this replay, or null when there is none. */
+  pendingOrder: ReplayOrder | null
 }
 
 export function ReplayPlayer({
@@ -83,6 +95,7 @@ export function ReplayPlayer({
   openPosition,
   strategies,
   replayTrades,
+  pendingOrder,
 }: ReplayPlayerProps) {
   const router = useRouter()
   const [cursorTs, setCursorTs] = useState(replay.cursorTs)
@@ -124,6 +137,15 @@ export function ReplayPlayer({
         setAtEnd(result.atEnd)
         if (result.atEnd) setPlaying(false)
 
+        if (result.filled) {
+          setNotice(
+            `Order filled at ${result.filled.fillPrice}${
+              result.filled.gapped ? " (gap fill at the open)" : ""
+            }.`,
+          )
+          router.refresh()
+        }
+
         if (result.closed) {
           // Playback stops on a fill so the outcome is not scrolled past. The
           // rule is deliberate and applies to both Step and Play.
@@ -160,6 +182,8 @@ export function ReplayPlayer({
   const [stopPrice, setStopPrice] = useState("")
   const [takeProfit, setTakeProfit] = useState("")
   const [tags, setTags] = useState("")
+  const [orderType, setOrderType] = useState<OrderType>("market")
+  const [requestedPrice, setRequestedPrice] = useState("")
 
   /** Appends a suggested tag, skipping one that is already present. */
   const addTag = useCallback((tag: string) => {
@@ -187,6 +211,28 @@ export function ReplayPlayer({
     if (currentPrice !== null) {
       levels.push({ price: currentPrice, label: "Price", kind: "current" })
     }
+    // A resting order draws its own distinctly-styled levels.
+    if (!openPosition && pendingOrder) {
+      if (pendingOrder.requestedPrice !== null) {
+        levels.push({
+          price: pendingOrder.requestedPrice,
+          label: `${pendingOrder.orderType.toUpperCase()} ${pendingOrder.direction === "long" ? "L" : "S"}`,
+          kind: "pending",
+        })
+      }
+      if (pendingOrder.stopPrice !== null) {
+        levels.push({ price: pendingOrder.stopPrice, label: "SL", kind: "stop" })
+      }
+      if (pendingOrder.takeProfit !== null) {
+        levels.push({
+          price: pendingOrder.takeProfit,
+          label: "TP",
+          kind: "target",
+        })
+      }
+      return levels
+    }
+
     if (!openPosition) return levels
 
     levels.push({
@@ -201,7 +247,7 @@ export function ReplayPlayer({
       levels.push({ price: openPosition.takeProfit, label: "TP", kind: "target" })
     }
     return levels
-  }, [openPosition, currentPrice])
+  }, [openPosition, currentPrice, pendingOrder])
 
   /**
    * Entry and exit markers, built from stored entry_candle_ts / exit_candle_ts
@@ -226,12 +272,15 @@ export function ReplayPlayer({
       addEntry(trade)
       if (!trade.closedAt) continue
 
-      // Which level closed it is inferred only from the recorded exit price
-      // matching a recorded level — never guessed from the candle.
-      const hitStop =
-        trade.stopPrice !== null && trade.exitPrice === trade.stopPrice
-      const hitTarget =
-        trade.takeProfit !== null && trade.exitPrice === trade.takeProfit
+      // The engine records why it closed the trade, so nothing is inferred.
+      //
+      // Trades predating exit_reason keep a NULL and are shown as a plain
+      // close rather than guessed from price equality. That guess is what this
+      // phase removed: it mislabels every gap fill, because a gapped stop
+      // exits at the bar's open and matches neither level. An honest "closed"
+      // beats a label that is wrong precisely when the move was violent.
+      const hitStop = trade.exitReason === "stop_loss"
+      const hitTarget = trade.exitReason === "take_profit"
 
       marks.push({
         ts: trade.closedAt,
@@ -277,28 +326,37 @@ export function ReplayPlayer({
   const stop = stopPrice.trim() === "" ? null : Number(stopPrice)
   const target = takeProfit.trim() === "" ? null : Number(takeProfit)
 
+  const requested =
+    requestedPrice.trim() === "" ? null : Number(requestedPrice)
+
   const levelErrors = useMemo(() => {
-    if (entryPrice === null) return {}
-    return validateLevels({
+    if (currentPrice === null) return {}
+    return validateOrderLevels({
       direction,
-      entryPrice,
+      orderType,
+      requestedPrice: requested,
+      currentPrice,
       stopPrice: stop,
       takeProfit: target,
     })
-  }, [direction, entryPrice, stop, target])
+  }, [direction, orderType, requested, currentPrice, stop, target])
 
   // Preview only. The server recomputes this with the same helper before
   // writing, so the browser cannot influence the size that is stored.
   const quantity = useMemo(() => {
-    if (entryPrice === null) return null
+    // Sized from where the position would actually open: the resting price for
+    // a limit/stop, the current price for a market order. The server recomputes
+    // this before writing, so this is a preview only.
+    const reference = orderType === "market" ? currentPrice : requested
+    if (reference === null) return null
     return computePositionSize({
       direction,
-      entryPrice,
+      entryPrice: reference,
       stopPrice: stop,
       balance,
       riskPercent,
     })
-  }, [direction, entryPrice, stop, balance, riskPercent])
+  }, [direction, orderType, requested, currentPrice, stop, balance, riskPercent])
 
   const riskAmount = (balance * riskPercent) / 100
 
@@ -307,14 +365,19 @@ export function ReplayPlayer({
     setError(null)
     setNotice(null)
     try {
-      const result = await openReplayPosition(initialBacktestState, formData)
+      const result = await placeReplayOrder(initialBacktestState, formData)
       if (result.error) {
         setError(result.error)
       } else {
         setStopPrice("")
         setTakeProfit("")
         setTags("")
-        setNotice("Position opened. Advance the replay to see how it resolves.")
+        setRequestedPrice("")
+        setNotice(
+          orderType === "market"
+            ? "Position opened. Advance the replay to see how it resolves."
+            : "Order resting. It fills when the market reaches your price.",
+        )
         router.refresh()
       }
     } finally {
@@ -440,13 +503,15 @@ export function ReplayPlayer({
             ) : lastClosed.pnl < 0 ? (
               <X className="size-4" />
             ) : null}
-            {lastClosed.stopPrice !== null &&
-            lastClosed.exitPrice === lastClosed.stopPrice
+            {/* Read from the recorded reason only. A trade without one is
+                shown as a plain close rather than inferred from price. */}
+            {lastClosed.exitReason === "stop_loss"
               ? "Stop loss hit"
-              : lastClosed.takeProfit !== null &&
-                  lastClosed.exitPrice === lastClosed.takeProfit
+              : lastClosed.exitReason === "take_profit"
                 ? "Take profit hit"
-                : "Position closed"}
+                : lastClosed.exitReason === "manual"
+                  ? "Position closed manually"
+                  : "Position closed"}
           </span>
           <span
             className={cn(
@@ -494,6 +559,60 @@ export function ReplayPlayer({
           <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
           <span>{error}</span>
         </div>
+      )}
+
+      {!openPosition && pendingOrder && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+              <span className="uppercase tracking-wide text-primary">
+                Pending {pendingOrder.orderType} {pendingOrder.direction}
+              </span>
+              <span className="text-muted-foreground">{pendingOrder.symbol}</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+              {[
+                ["Price", pendingOrder.requestedPrice ?? "—"],
+                ["Stop", pendingOrder.stopPrice ?? "—"],
+                ["Target", pendingOrder.takeProfit ?? "—"],
+                ["Size", pendingOrder.quantity],
+                [
+                  "Good for",
+                  pendingOrder.expiryBars === null
+                    ? "Unlimited"
+                    : `${pendingOrder.expiryBars} bars (${pendingOrder.barsElapsed} elapsed)`,
+                ],
+              ].map(([label, value]) => (
+                <div key={String(label)}>
+                  <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {label}
+                  </dt>
+                  <dd className="font-mono text-sm tabular-nums">
+                    {String(value)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+
+            <p className="text-xs text-muted-foreground">
+              The order fills only when a revealed candle reaches your price.
+              If the filling candle also touches your stop, the position is
+              opened and stopped out on that same bar — a bar records only its
+              high and low, never the order they occurred in, so the ambiguous
+              case resolves against you rather than being guessed.
+            </p>
+
+            <form action={cancelReplayOrder}>
+              <input type="hidden" name="id" value={pendingOrder.id} />
+              <input type="hidden" name="replayId" value={replay.id} />
+              <Button type="submit" variant="outline" size="sm">
+                Cancel order
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
       )}
 
       {openPosition ? (
@@ -615,7 +734,7 @@ export function ReplayPlayer({
             </form>
           </CardContent>
         </Card>
-      ) : (
+      ) : pendingOrder ? null : (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-semibold">
@@ -630,7 +749,72 @@ export function ReplayPlayer({
               <input type="hidden" name="replayId" value={replay.id} />
               <input type="hidden" name="direction" value={direction} />
 
+              <input type="hidden" name="orderType" value={orderType} />
+
               <div className="flex flex-wrap items-end gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="orderType" className="text-xs">
+                    Order type
+                  </Label>
+                  <Select
+                    value={orderType}
+                    onValueChange={(v) => setOrderType(v as OrderType)}
+                  >
+                    <SelectTrigger id="orderType" className="h-9 w-[130px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="market">Market</SelectItem>
+                      <SelectItem value="limit">Limit</SelectItem>
+                      <SelectItem value="stop">Stop</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {orderType !== "market" && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="requestedPrice" className="text-xs">
+                      {orderType === "limit" ? "Limit price" : "Stop entry price"}
+                    </Label>
+                    <Input
+                      id="requestedPrice"
+                      name="requestedPrice"
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={requestedPrice}
+                      onChange={(e) => setRequestedPrice(e.target.value)}
+                      placeholder={orderType === "limit" ? "Below price" : "Above price"}
+                      className="h-9 w-[160px]"
+                      aria-invalid={Boolean(levelErrors.requestedPrice)}
+                    />
+                    {levelErrors.requestedPrice && (
+                      <p className="text-xs text-negative">
+                        {levelErrors.requestedPrice}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {orderType !== "market" && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="expiryBars" className="text-xs">
+                      Good for
+                    </Label>
+                    <Select name="expiryBars" defaultValue="none">
+                      <SelectTrigger id="expiryBars" className="h-9 w-[130px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Unlimited</SelectItem>
+                        <SelectItem value="10">10 bars</SelectItem>
+                        <SelectItem value="25">25 bars</SelectItem>
+                        <SelectItem value="50">50 bars</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
                 <div className="flex gap-1">
                   <Button
                     type="button"
@@ -851,7 +1035,9 @@ export function ReplayPlayer({
                   )}
                 >
                   {busy && <Loader2 className="size-4 animate-spin" />}
-                  Open {direction}
+                  {orderType === "market"
+                    ? `Open ${direction}`
+                    : `Place ${orderType} ${direction}`}
                 </Button>
               </div>
             </form>

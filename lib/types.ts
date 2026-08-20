@@ -117,6 +117,11 @@ export interface SimulatedTrade extends TradeRow {
   origin: "manual" | "replay"
   /** The replay that produced this trade, or null for a hand-entered one. */
   replayId: string | null
+  /**
+   * Why the trade closed, recorded by the engine at close time. Null on trades
+   * closed before this was tracked, where the UI falls back to inference.
+   */
+  exitReason: "stop_loss" | "take_profit" | "manual" | "other" | null
   /** Setup grade, e.g. "A+". Null when the trade was not classified. */
   setup: string | null
   /**
@@ -175,4 +180,24 @@ export interface ReplaySession {
   /** Furthest revealed bar. Never past rangeEnd. */
   cursorTs: string
   speed: number
+}
+
+/** A resting replay order awaiting historical conditions. */
+export interface ReplayOrder {
+  id: string
+  replayId: string
+  symbol: string
+  direction: TradeDirection
+  orderType: "market" | "limit" | "stop"
+  status: "pending" | "filled" | "cancelled" | "expired"
+  requestedPrice: number | null
+  stopPrice: number | null
+  takeProfit: number | null
+  quantity: number
+  expiryBars: number | null
+  barsElapsed: number
+  fillPrice: number | null
+  filledAt: string | null
+  cancelledAt: string | null
+  createdAt: string
 }

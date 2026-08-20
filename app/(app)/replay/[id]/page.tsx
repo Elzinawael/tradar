@@ -7,12 +7,15 @@ import { MetricCard } from "@/components/metric-card"
 import { ReplayPlayer } from "@/components/replay/replay-player"
 import { TradeTable } from "@/components/trades/trade-table"
 import { ReplayPerformance } from "@/components/replay/replay-performance"
+import { ReplayOrders } from "@/components/replay/replay-orders"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
   getBacktestSessionById,
   getCandles,
   getOpenReplayPosition,
+  getPendingReplayOrder,
+  getReplayOrders,
   getStrategies,
   getReplaySessionById,
   getSessionPerformance,
@@ -36,7 +39,8 @@ export default async function ReplayDetailPage({
   const session = await getBacktestSessionById(replay.sessionId)
   if (!session) notFound()
 
-  const [candles, trades, openPosition, strategies] = await Promise.all([
+  const [candles, trades, openPosition, strategies, pendingOrder, orders] =
+    await Promise.all([
     // Bounded to the replay's own window: candles outside the selected range
     // are never fetched, so they cannot reach the client at all.
     getCandles({
@@ -49,6 +53,8 @@ export default async function ReplayDetailPage({
     getSimulatedTrades(session.id),
     getOpenReplayPosition(replay.id),
     getStrategies(),
+    getPendingReplayOrder(replay.id),
+    getReplayOrders(replay.id),
   ])
 
   const { summary } = await getSessionPerformance(session, trades)
@@ -142,6 +148,7 @@ export default async function ReplayDetailPage({
           openPosition={openPosition}
           strategies={strategies}
           replayTrades={replayTrades}
+          pendingOrder={pendingOrder}
         />
       )}
 
@@ -149,6 +156,10 @@ export default async function ReplayDetailPage({
           in the same session is included in the statistics even though it has
           no marker on this chart. */}
       <ReplayPerformance trades={trades} startingBalance={session.initialBalance} />
+
+      {/* Orders are kept separate from realised trade history: a pending or
+          cancelled order is an intent, not a trade, and never reaches analytics. */}
+      <ReplayOrders orders={orders} />
 
       <Card className="p-0">
         <TradeTable
