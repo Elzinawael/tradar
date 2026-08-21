@@ -45,6 +45,7 @@ apply "$ROOT/supabase/migrations/0007_replay_ownership_guard.sql"
 apply "$ROOT/supabase/migrations/0008_one_open_replay_position.sql"
 apply "$ROOT/supabase/migrations/0009_trade_classification.sql"
 apply "$ROOT/supabase/migrations/0010_replay_orders.sql"
+apply "$ROOT/supabase/migrations/0011_instrument_registry.sql"
 
 echo "==> Running smoke tests"
 # Assertions raise on failure, so ON_ERROR_STOP turns any FAIL into exit 1.
@@ -86,6 +87,12 @@ psql -h "$HOST" -p "$PORT" -U "$USER_NAME" -d "$DB" -v ON_ERROR_STOP=1 \
 echo "==> Running replay order tests"
 psql -h "$HOST" -p "$PORT" -U "$USER_NAME" -d "$DB" -v ON_ERROR_STOP=1 \
   -f "$ROOT/supabase/tests/07_replay_orders.sql" 2>&1 |
+  sed 's/^psql:.*NOTICE:  //' |
+  grep -E 'PASS|FAIL|NOTE|ERROR|^---'
+
+echo "==> Running instrument registry tests"
+psql -h "$HOST" -p "$PORT" -U "$USER_NAME" -d "$DB" -v ON_ERROR_STOP=1 \
+  -f "$ROOT/supabase/tests/08_instrument_registry.sql" 2>&1 |
   sed 's/^psql:.*NOTICE:  //' |
   grep -E 'PASS|FAIL|NOTE|ERROR|^---'
 
