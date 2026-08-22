@@ -46,6 +46,7 @@ apply "$ROOT/supabase/migrations/0008_one_open_replay_position.sql"
 apply "$ROOT/supabase/migrations/0009_trade_classification.sql"
 apply "$ROOT/supabase/migrations/0010_replay_orders.sql"
 apply "$ROOT/supabase/migrations/0011_instrument_registry.sql"
+apply "$ROOT/supabase/migrations/0012_provider_listings.sql"
 
 echo "==> Running smoke tests"
 # Assertions raise on failure, so ON_ERROR_STOP turns any FAIL into exit 1.

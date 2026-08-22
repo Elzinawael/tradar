@@ -38,6 +38,15 @@ const capabilities: ProviderCapabilities = {
   timeframes: ["M1", "M5", "M15", "H1", "H4", "D1"],
   // No credentials required, so this adapter is always usable.
   configured: true,
+  licensing: {
+    // Binance's public endpoint is freely accessible, but redistribution is
+    // still an operator decision rather than something this code may assume.
+    historical: true,
+    realtime: false,
+    delayed: false,
+    internalOnly: true,
+    externalDisplay: false,
+  },
 }
 
 export const binanceProvider: MarketDataProvider = {

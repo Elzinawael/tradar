@@ -10,6 +10,8 @@
 
 import { binanceProvider } from "./providers/binance"
 import { csvProvider } from "./providers/csv"
+import { massiveProvider } from "./providers/massive"
+import { twelveDataProvider } from "./providers/twelve-data"
 import type { MarketDataProvider } from "./provider"
 import type {
   Instrument,
@@ -25,7 +27,12 @@ import type {
  * requires `configured: true` and a listing for the instrument. That split is
  * what lets an unconfigured vendor be added safely.
  */
-export const PROVIDERS: MarketDataProvider[] = [binanceProvider, csvProvider]
+export const PROVIDERS: MarketDataProvider[] = [
+  binanceProvider,
+  twelveDataProvider,
+  massiveProvider,
+  csvProvider,
+]
 
 export function getProvider(key: string): MarketDataProvider | null {
   return PROVIDERS.find((p) => p.capabilities.key === key) ?? null
@@ -72,6 +79,15 @@ export function getBestProvider(
     const provider = getProvider(listing.provider)
     if (!provider || !provider.capabilities.configured) continue
     if (!provider.capabilities.historical) continue
+
+    // Capabilities must actually gate availability: a provider that does not
+    // claim a market must never serve it, even if a listing exists. Without
+    // this an operator-added row could route crypto to an equities vendor and
+    // the failure would only surface as a confusing upstream error.
+    if (!provider.capabilities.categories.includes(instrument.category)) {
+      reason = "instrument_unsupported"
+      continue
+    }
 
     const providerSupportsTimeframe =
       provider.capabilities.timeframes.includes(timeframe)

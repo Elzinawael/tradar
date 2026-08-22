@@ -12,7 +12,10 @@ import { getCandleCatalog, getIsAdmin } from "@/lib/data"
 import { searchInstruments, getListingsFor } from "@/lib/market-data/registry"
 import { getBestProvider } from "@/lib/market-data/router"
 import type { MarketCategory } from "@/lib/market-data/types"
-import { MARKET_CATEGORIES } from "@/lib/market-data/types"
+import {
+  MARKET_CATEGORIES,
+  UNAVAILABLE_MESSAGES,
+} from "@/lib/market-data/types"
 
 export const metadata: Metadata = { title: "Market data" }
 
@@ -56,11 +59,16 @@ export default async function MarketDataPage({
       // Imported data counts as a source even with no live provider — that is
       // exactly what the CSV fallback is for.
       available: route.ok || bars > 0,
-      source: route.ok
-        ? route.provider.capabilities.label
-        : bars > 0
-          ? "Imported data"
-          : null,
+      // Only administrators are told which vendor would serve the request.
+      source: isAdmin
+        ? route.ok
+          ? route.provider.capabilities.label
+          : bars > 0
+            ? "Imported data"
+            : null
+        : null,
+      unavailableMessage:
+        route.ok || bars > 0 ? null : UNAVAILABLE_MESSAGES[route.reason],
       storedBars: bars,
     }
   })
@@ -73,7 +81,7 @@ export default async function MarketDataPage({
       />
 
       <Suspense fallback={<div className="h-9" />}>
-        <InstrumentCatalog rows={rows} />
+        <InstrumentCatalog rows={rows} showProviders={isAdmin} />
       </Suspense>
 
       {/*

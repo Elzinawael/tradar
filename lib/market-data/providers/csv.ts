@@ -30,6 +30,15 @@ const capabilities: ProviderCapabilities = {
   ],
   timeframes: ["M1", "M5", "M15", "H1", "H4", "D1"],
   configured: true,
+  licensing: {
+    // Operator-supplied data. Whatever rights exist came with the file, so
+    // nothing is assumed here.
+    historical: true,
+    realtime: false,
+    delayed: false,
+    internalOnly: true,
+    externalDisplay: false,
+  },
 }
 
 export const csvProvider: MarketDataProvider = {

@@ -22,6 +22,8 @@ import { getBestProvider } from "./router"
 import { findMissingRanges, type StoredRange } from "./coverage"
 import { isSaneCandle } from "./provider"
 import {
+  PROVIDER_ERROR_MESSAGES,
+  ProviderError,
   UNAVAILABLE_MESSAGES,
   type Candle,
   type HistoricalResult,
@@ -199,14 +201,27 @@ export async function getHistoricalData(params: {
         to: gap.to,
       })
       await persistCandles(symbol, timeframe, fetched)
-    } catch {
+    } catch (error) {
       // Vendor errors are deliberately not surfaced verbatim: a customer
-      // should not see a rate-limit code or an upstream hostname.
+      // should not see a rate-limit code, an upstream hostname or an API key
+      // problem. Adapters raise a typed ProviderError; its operator-facing
+      // detail is logged, and only the mapped message is returned.
+      if (error instanceof ProviderError) {
+        console.error(
+          `[market-data] ${route.provider.capabilities.key} ${error.code}: ${error.message}`,
+        )
+        return {
+          ok: false,
+          reason: "provider_error",
+          message: PROVIDER_ERROR_MESSAGES[error.code],
+        }
+      }
+
+      console.error("[market-data] unexpected provider failure", error)
       return {
         ok: false,
         reason: "provider_error",
-        message:
-          "Historical data could not be retrieved right now. Please try again shortly.",
+        message: PROVIDER_ERROR_MESSAGES.provider_unavailable,
       }
     }
   }
@@ -259,4 +274,22 @@ export async function getAvailability(
     provider: null,
     message: UNAVAILABLE_MESSAGES[route.reason],
   }
+}
+
+
+/**
+ * Ensures a range is present locally, fetching only the gaps, then returns it.
+ *
+ * The name the brief specifies. It is the same operation as
+ * getHistoricalData() — check cache, fill gaps, return the complete local
+ * dataset — exposed under the name Replay and Backtesting call, so there is
+ * one implementation rather than two that could drift.
+ */
+export async function ensureHistoricalData(params: {
+  symbol: string
+  timeframe: string
+  from: string
+  to: string
+}): Promise<HistoricalResult> {
+  return getHistoricalData(params)
 }

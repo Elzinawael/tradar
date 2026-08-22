@@ -37,10 +37,17 @@ select assert(
 
 \echo '--- M2. provider listings ---'
 
--- Only crypto is listed, because Binance is the only credential-free adapter.
+-- Phase 5 listed only crypto. Phase 5B adds Twelve Data listings for forex,
+-- metals and US equities, plus INACTIVE Massive listings for the futures
+-- roots. Assert the shape rather than a bare count, so adding a provider later
+-- does not break this for the wrong reason.
 select assert(
-  (select count(*) from public.instrument_providers) = 3,
-  'only the crypto instruments have a provider listing'
+  (select count(*) from public.instrument_providers where provider = 'binance') = 3,
+  'the three crypto instruments are listed with binance'
+);
+select assert(
+  (select count(*) from public.instrument_providers where provider = 'twelvedata') >= 9,
+  'forex, metals and equities are listed with twelvedata'
 );
 select assert(
   (select provider from public.instrument_providers ip
@@ -51,11 +58,21 @@ select assert(
 
 -- Instruments Tradar can represent but cannot yet fetch must have NO listing,
 -- so the UI reports "no source" rather than implying a feed that does not exist.
+-- ES and NQ are contract ROOTS, not tradeable tickers, so their Massive
+-- listings are seeded INACTIVE. The registry only returns active listings, so
+-- the catalogue reports "no source" for them until an operator points
+-- provider_symbol at a real contract — which is the truth today.
 select assert(
   (select count(*) from public.instrument_providers ip
      join public.instruments i on i.id = ip.instrument_id
-    where i.symbol in ('XAUUSD','EURUSD','AAPL','ES')) = 0,
-  'instruments without a configured provider have no listing'
+    where i.symbol in ('ES','NQ') and ip.active) = 0,
+  'futures roots have no ACTIVE listing until a contract is configured'
+);
+select assert(
+  (select count(*) from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol in ('ES','NQ') and ip.provider = 'massive') = 2,
+  'futures roots carry an inactive massive listing for operators to complete'
 );
 
 -- One provider may list an instrument only once.
@@ -233,3 +250,141 @@ select assert(
 reset role;
 
 \echo '--- INSTRUMENT REGISTRY TESTS PASSED ---'
+
+\echo '--- M6. Phase 5B provider listings ---'
+
+-- Assert the SET, not a magic number: a bare count breaks whenever the
+-- catalogue grows and says nothing about which markets are covered.
+select assert(
+  (select count(*) from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where ip.provider = 'twelvedata'
+      and i.symbol in ('EURUSD','GBPUSD','USDJPY','AUDUSD',
+                       'XAUUSD','XAGUSD','AAPL','MSFT','TSLA')) = 9,
+  'Twelve Data lists the forex, metals and equity instruments'
+);
+
+-- Crypto keeps Binance as the better-priority route. A listing alone does not
+-- decide routing: the adapter must also claim the market, which is enforced in
+-- the router and covered by the unit tests.
+select assert(
+  (select min(priority) from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol = 'BTCUSDT' and ip.provider = 'binance')
+  <
+  coalesce((select min(priority) from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol = 'BTCUSDT' and ip.provider <> 'binance'), 9999),
+  'Binance outranks other providers for crypto'
+);
+
+-- Provider symbols differ from Tradar symbols. This mapping is the entire
+-- reason instrument_providers exists.
+select assert(
+  (select ip.provider_symbol from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol = 'EURUSD' and ip.provider = 'twelvedata') = 'EUR/USD',
+  'forex maps to the provider''s slash-separated symbol'
+);
+select assert(
+  (select ip.provider_symbol from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol = 'XAUUSD' and ip.provider = 'twelvedata') = 'XAU/USD',
+  'spot metals map to the provider''s symbol'
+);
+select assert(
+  (select ip.provider_symbol from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol = 'AAPL' and ip.provider = 'twelvedata') = 'AAPL',
+  'equities keep their plain ticker'
+);
+
+-- H4 is not listed, because the adapter does not map it. Listing a timeframe
+-- the adapter cannot serve would promise an empty response.
+select assert(
+  not (
+    select 'H4' = any(ip.timeframes)
+      from public.instrument_providers ip
+      join public.instruments i on i.id = ip.instrument_id
+     where i.symbol = 'EURUSD' and ip.provider = 'twelvedata'
+  ),
+  'Twelve Data listings do not claim H4'
+);
+
+\echo '--- M7. futures listings are contract-aware and inactive ---'
+
+select assert(
+  (select count(*) from public.instrument_providers where provider = 'massive') = 2,
+  'Massive lists ES and NQ'
+);
+
+-- Inserted inactive: a bare root cannot be fetched, so routing must not pick
+-- it up and the catalogue must keep reporting "no source" until an operator
+-- configures a real contract.
+select assert(
+  (select count(*) from public.instrument_providers
+    where provider = 'massive' and active) = 0,
+  'futures listings are inactive until a contract is configured'
+);
+select assert(
+  (select ip.metadata ->> 'requires_contract' from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol = 'ES' and ip.provider = 'massive') = 'true',
+  'futures listings record that a contract must be configured'
+);
+select assert(
+  (select ip.metadata ->> 'contract_root' from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol = 'ES' and ip.provider = 'massive') = 'ES',
+  'the contract root is recorded, not a guessed contract ticker'
+);
+
+\echo '--- M8. instruments still without any source ---'
+
+-- Indices were deliberately left unlisted rather than assumed supported.
+select assert(
+  (select count(*) from public.instrument_providers ip
+     join public.instruments i on i.id = ip.instrument_id
+    where i.symbol in ('SPX500','NAS100','GER40')) = 0,
+  'indices are not claimed by any provider yet'
+);
+
+\echo '--- M9. listings remain read-only to customers ---'
+
+set role authenticated;
+set request.jwt.claims = '{"sub":"44440000-0000-0000-0000-000000000001"}';
+
+-- Readability is the property under test here, not the catalogue size.
+select assert(
+  (select count(*) from public.instrument_providers where provider = 'twelvedata') > 0,
+  'a signed-in user can read the new listings'
+);
+
+do $$
+begin
+  begin
+    insert into public.instrument_providers (instrument_id, provider, provider_symbol)
+    select id, 'attacker', 'EVIL' from public.instruments where symbol = 'EURUSD';
+    raise exception 'FAIL  a user added a provider listing';
+  exception when insufficient_privilege or others then
+    raise notice 'PASS  a user cannot add a provider listing';
+  end;
+end $$;
+
+do $$
+declare affected integer;
+begin
+  begin
+    update public.instrument_providers set active = true where provider = 'massive';
+    get diagnostics affected = row_count;
+    if affected = 0 then
+      raise notice 'PASS  a user cannot activate a futures listing';
+    else
+      raise exception 'FAIL  a user activated % futures listings', affected;
+    end if;
+  exception when insufficient_privilege then
+    raise notice 'PASS  a user has no update privilege on listings';
+  end;
+end $$;
+
+reset role;

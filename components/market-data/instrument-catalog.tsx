@@ -21,8 +21,13 @@ export interface CatalogRow {
   exchange: string | null
   /** True when a configured provider, or already-imported data, can serve it. */
   available: boolean
-  /** Human label for the source, or null when unavailable. */
+  /**
+   * Provider label. Populated for administrators only — a normal customer is
+   * shown data status, not which vendor Tradar happens to route through.
+   */
   source: string | null
+  /** Why data cannot be served, when it cannot. Customer-safe wording. */
+  unavailableMessage: string | null
   storedBars: number
 }
 
@@ -38,7 +43,14 @@ export interface CatalogRow {
  * configured provider lists it yet — which is a different statement from "this
  * market does not exist", and worth showing rather than hiding.
  */
-export function InstrumentCatalog({ rows }: { rows: CatalogRow[] }) {
+export function InstrumentCatalog({
+  rows,
+  showProviders = false,
+}: {
+  rows: CatalogRow[]
+  /** Admin/debug view. Reveals which provider would serve each instrument. */
+  showProviders?: boolean
+}) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -139,19 +151,33 @@ export function InstrumentCatalog({ rows }: { rows: CatalogRow[] }) {
                   </p>
                 </div>
 
-                <div className="shrink-0 text-right">
+                <div className="flex shrink-0 flex-col items-end gap-1 text-right">
                   {row.available ? (
                     <Badge
                       variant="outline"
                       className="border-positive/30 bg-positive/10 text-positive"
                     >
                       <Check className="mr-1 size-3" />
-                      {row.source}
+                      Data available
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="font-normal text-muted-foreground">
-                      No source
+                      Data unavailable
                     </Badge>
+                  )}
+
+                  {/* The vendor is an implementation detail. Customers get a
+                      status; operators get the routing decision. */}
+                  {showProviders && row.source && (
+                    <span className="text-[10px] text-muted-foreground">
+                      via {row.source}
+                    </span>
+                  )}
+
+                  {!row.available && row.unavailableMessage && (
+                    <span className="max-w-[180px] text-[10px] text-muted-foreground">
+                      {row.unavailableMessage}
+                    </span>
                   )}
                 </div>
               </CardContent>
