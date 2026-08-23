@@ -3,7 +3,7 @@
 import { useActionState, useMemo, useState } from "react"
 import { useFormStatus } from "react-dom"
 import Link from "next/link"
-import { AlertCircle, Loader2 } from "lucide-react"
+import { AlertCircle, Check, Download, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -17,104 +17,218 @@ import {
 } from "@/components/ui/select"
 import { createReplaySession } from "@/lib/actions/replay"
 import {
+  ensureReplayData,
+  initialEnsureDataState,
+  type EnsureDataState,
+} from "@/lib/actions/market-data"
+import {
   initialBacktestState,
   type BacktestActionState,
 } from "@/lib/actions/state"
+import { TIMEFRAMES, TIMEFRAME_LABELS } from "@/lib/candles"
+import { MARKET_CATEGORY_LABELS } from "@/lib/market-data/types"
 import type { BacktestSession } from "@/lib/types"
 
-interface CatalogEntry {
+export interface InstrumentOption {
   symbol: string
-  timeframe: string
-  count: number
-  first: string
-  last: string
+  displayName: string
+  category: string
+  /** True when a configured provider, or already-stored data, can serve it. */
+  available: boolean
+  storedBars: number
 }
 
-function SubmitButton() {
+function PrepareButton() {
   const { pending } = useFormStatus()
   return (
-    <Button type="submit" disabled={pending}>
+    <Button type="submit" variant="outline" disabled={pending}>
+      {pending ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <Download className="size-4" />
+      )}
+      {pending ? "Fetching historical data…" : "Check / fetch data"}
+    </Button>
+  )
+}
+
+function StartButton({ disabled }: { disabled: boolean }) {
+  const { pending } = useFormStatus()
+  return (
+    <Button type="submit" disabled={pending || disabled}>
       {pending && <Loader2 className="size-4 animate-spin" />}
       Start replay
     </Button>
   )
 }
 
+/**
+ * Replay setup.
+ *
+ * The customer picks a market, a timeframe and a period. Tradar obtains
+ * whatever candles are missing — no CSV, no provider choice, no mention of a
+ * vendor. Data preparation is a separate step from starting the replay so a
+ * download that takes a moment does not look like a failed submit.
+ */
 export function NewReplayForm({
   sessions,
-  catalog,
+  instruments,
 }: {
   sessions: BacktestSession[]
-  catalog: CatalogEntry[]
+  instruments: InstrumentOption[]
 }) {
+  const [symbol, setSymbol] = useState(instruments[0]?.symbol ?? "")
+  const [timeframe, setTimeframe] = useState("H1")
+  const [from, setFrom] = useState("")
+  const [to, setTo] = useState("")
+
+  const [dataState, prepareAction] = useActionState<EnsureDataState, FormData>(
+    ensureReplayData,
+    initialEnsureDataState,
+  )
   const [state, formAction] = useActionState<BacktestActionState, FormData>(
     createReplaySession,
     initialBacktestState,
   )
 
-  const [pair, setPair] = useState(
-    catalog.length > 0 ? `${catalog[0].symbol}|${catalog[0].timeframe}` : "",
-  )
-
   const selected = useMemo(
-    () => catalog.find((c) => `${c.symbol}|${c.timeframe}` === pair),
-    [catalog, pair],
+    () => instruments.find((i) => i.symbol === symbol),
+    [instruments, symbol],
   )
 
-  const [symbol, timeframe] = pair.split("|")
-
-  // Default the range to the data actually available, so a user cannot pick a
-  // window with no candles in it.
-  const defaultFrom = selected ? selected.first.slice(0, 10) : ""
-  const defaultTo = selected ? selected.last.slice(0, 10) : ""
+  // The replay can only start once candles exist for the chosen window.
+  const ready = dataState.status === "ready"
 
   return (
-    <Card>
-      <CardContent className="pt-6">
-        <form action={formAction} className="flex flex-col gap-6">
-          <input type="hidden" name="symbol" value={symbol ?? ""} />
-          <input type="hidden" name="timeframe" value={timeframe ?? ""} />
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="pt-6">
+          {/* Step 1 — choose the market and period, and prepare the data. */}
+          <form action={prepareAction} className="flex flex-col gap-6">
+            <input type="hidden" name="symbol" value={symbol} />
+            <input type="hidden" name="timeframe" value={timeframe} />
+            <input type="hidden" name="from" value={from} />
+            <input type="hidden" name="to" value={to} />
 
-          {state.error && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive-foreground"
-            >
-              <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-              <span>{state.error}</span>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="instrument">Instrument</Label>
+                <Select value={symbol} onValueChange={setSymbol}>
+                  <SelectTrigger id="instrument">
+                    <SelectValue placeholder="Select an instrument" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {instruments.map((i) => (
+                      <SelectItem key={i.symbol} value={i.symbol}>
+                        {i.symbol} — {i.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selected && (
+                  <p className="text-xs text-muted-foreground">
+                    {MARKET_CATEGORY_LABELS[
+                      selected.category as keyof typeof MARKET_CATEGORY_LABELS
+                    ] ?? selected.category}
+                    {selected.available
+                      ? " · data available"
+                      : " · no data source configured"}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="timeframe">Timeframe</Label>
+                <Select value={timeframe} onValueChange={setTimeframe}>
+                  <SelectTrigger id="timeframe">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TIMEFRAMES.map((tf) => (
+                      <SelectItem key={tf} value={tf}>
+                        {tf} — {TIMEFRAME_LABELS[tf]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-          )}
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="pair">Market</Label>
-              <Select value={pair} onValueChange={setPair}>
-                <SelectTrigger id="pair">
-                  <SelectValue placeholder="Select market" />
-                </SelectTrigger>
-                <SelectContent>
-                  {catalog.map((c) => (
-                    <SelectItem
-                      key={`${c.symbol}|${c.timeframe}`}
-                      value={`${c.symbol}|${c.timeframe}`}
-                    >
-                      {c.symbol} · {c.timeframe} ({c.count.toLocaleString()} bars)
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {catalog.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  No candles loaded.{" "}
-                  <Link href="/replay/data" className="text-primary underline-offset-2 hover:underline">
-                    Import market data
-                  </Link>{" "}
-                  first.
-                </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="from">From</Label>
+                <Input
+                  id="from"
+                  type="date"
+                  value={from}
+                  onChange={(e) => setFrom(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="to">To</Label>
+                <Input
+                  id="to"
+                  type="date"
+                  value={to}
+                  onChange={(e) => setTo(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <PrepareButton />
+
+              {dataState.status === "ready" && (
+                <span className="flex items-center gap-1.5 text-xs text-positive">
+                  <Check className="size-4" />
+                  {dataState.message}
+                </span>
+              )}
+
+              {(dataState.status === "unavailable" ||
+                dataState.status === "error") && (
+                <span
+                  role="alert"
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <AlertCircle className="size-4 text-negative" />
+                  {dataState.message}
+                </span>
               )}
             </div>
 
-            <div className="flex flex-col gap-2">
+            {/* Administrators see the routing decision; customers never do. */}
+            {dataState.providerDetail && (
+              <p className="text-[10px] text-muted-foreground">
+                {dataState.providerDetail}
+              </p>
+            )}
+          </form>
+        </CardContent>
+      </Card>
+
+      {/* Step 2 — record into a session and start. */}
+      <Card>
+        <CardContent className="pt-6">
+          <form action={formAction} className="flex flex-col gap-6">
+            <input type="hidden" name="symbol" value={symbol} />
+            <input type="hidden" name="timeframe" value={timeframe} />
+            <input type="hidden" name="rangeStart" value={from} />
+            <input type="hidden" name="rangeEnd" value={to} />
+
+            {state.error && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive-foreground"
+              >
+                <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+                <span>{state.error}</span>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2 sm:max-w-sm">
               <Label htmlFor="sessionId">Record into session</Label>
               <Select name="sessionId" defaultValue={sessions[0]?.id}>
                 <SelectTrigger id="sessionId">
@@ -134,59 +248,23 @@ export function NewReplayForm({
                 </p>
               )}
             </div>
-          </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="rangeStart">From</Label>
-              <Input
-                id="rangeStart"
-                name="rangeStart"
-                type="date"
-                defaultValue={defaultFrom}
-                key={`from-${defaultFrom}`}
-                required
-              />
-              {state.fieldErrors.rangeStart && (
-                <p className="text-xs text-negative">
-                  {state.fieldErrors.rangeStart}
-                </p>
-              )}
+            {!ready && (
+              <p className="text-xs text-muted-foreground">
+                Check the data for your chosen period first — the replay needs
+                candles before it can start.
+              </p>
+            )}
+
+            <div className="flex items-center gap-2">
+              <StartButton disabled={!ready} />
+              <Button asChild variant="ghost">
+                <Link href="/replay">Cancel</Link>
+              </Button>
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="rangeEnd">To</Label>
-              <Input
-                id="rangeEnd"
-                name="rangeEnd"
-                type="date"
-                defaultValue={defaultTo}
-                key={`to-${defaultTo}`}
-                required
-              />
-              {state.fieldErrors.rangeEnd && (
-                <p className="text-xs text-negative">
-                  {state.fieldErrors.rangeEnd}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {selected && (
-            <p className="text-xs text-muted-foreground">
-              {selected.symbol} {selected.timeframe} has data from{" "}
-              {new Date(selected.first).toLocaleDateString()} to{" "}
-              {new Date(selected.last).toLocaleDateString()}.
-            </p>
-          )}
-
-          <div className="flex items-center gap-2">
-            <SubmitButton />
-            <Button asChild variant="ghost">
-              <Link href="/replay">Cancel</Link>
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   )
 }

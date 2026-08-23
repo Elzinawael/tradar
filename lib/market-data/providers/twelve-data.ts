@@ -220,8 +220,18 @@ export const twelveDataProvider: MarketDataProvider = {
       }
 
       const values = body.values
-      // An empty range is a legitimate answer — a weekend, a holiday, or a
-      // period before the instrument listed — not an error.
+      // A non-array `values` is a malformed response and must surface as an
+      // error. Treating it like an empty range would silently store nothing
+      // over a range the caller believes was fetched, and the gap would only
+      // be noticed much later as missing history.
+      if (values !== undefined && values !== null && !Array.isArray(values)) {
+        throw new ProviderError(
+          "invalid_provider_response",
+          "Twelve Data returned a malformed values field",
+        )
+      }
+      // An empty range IS a legitimate answer — a weekend, a holiday, or a
+      // period before the instrument listed.
       if (!Array.isArray(values) || values.length === 0) break
 
       const page_candles = values
@@ -241,6 +251,14 @@ export const twelveDataProvider: MarketDataProvider = {
       // A short page means the range is exhausted.
       if (values.length < MAX_OUTPUTSIZE) break
     }
+
+    // Twelve Data returns newest-first. Everything downstream — the replay
+    // reveal, the equity curve, the chart — assumes ascending time, so the
+    // adapter normalises the order rather than leaving each consumer to
+    // remember. Sorting here also makes paging order irrelevant.
+    collected.sort(
+      (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
+    )
 
     return collected
   },
