@@ -10,6 +10,7 @@
  * from the listing and never sees Tradar's.
  */
 
+import type { LiveDisconnectKind, LiveTick } from "./live/types"
 import type {
   Candle,
   HistoricalRequest,
@@ -35,13 +36,20 @@ export interface MarketDataProvider {
   getLatestPrice?(providerSymbol: string): Promise<number | null>
 
   /**
-   * Live subscription. Declared for shape only — no adapter implements it yet,
-   * and Replay does not consume live data. Present so adding streaming later
-   * does not require changing this interface.
+   * Subscribes to live price updates.
+   *
+   * Optional: a purely historical source does not implement it, and the router
+   * checks `capabilities.realtime` rather than assuming this exists. Emits
+   * normalised ticks, never provider payloads.
+   *
+   * Failures arrive through `onError` rather than as a rejected promise,
+   * because a stream breaks asynchronously long after subscribe() resolved.
+   * Resolves with an unsubscribe function.
    */
   subscribeLive?(
     providerSymbol: string,
-    onCandle: (candle: Candle) => void,
+    onTick: (tick: LiveTick) => void,
+    onError?: (kind: LiveDisconnectKind, detail: string) => void,
   ): Promise<() => void>
 }
 

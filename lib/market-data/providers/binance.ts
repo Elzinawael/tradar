@@ -12,6 +12,7 @@
 
 import { TIMEFRAME_MINUTES } from "@/lib/candles"
 import { isSaneCandle, type MarketDataProvider } from "../provider"
+import type { LiveDisconnectKind, LiveTick } from "../live/types"
 import type { Candle, HistoricalRequest, ProviderCapabilities } from "../types"
 
 /** Binance returns at most 1000 bars per request. */
@@ -31,9 +32,10 @@ const capabilities: ProviderCapabilities = {
   key: "binance",
   label: "Binance",
   historical: true,
-  // The public REST endpoint is polled, not streamed. Marked false rather than
-  // implying a live feed Tradar does not consume.
-  realtime: false,
+  // Binance publishes a genuine public WebSocket stream that needs no API key
+  // and no account, so this is real streaming — not polling relabelled. It is
+  // the only adapter in Tradar that can currently claim realtime.
+  realtime: true,
   categories: ["crypto"],
   timeframes: ["M1", "M5", "M15", "H1", "H4", "D1"],
   // No credentials required, so this adapter is always usable.
@@ -105,4 +107,76 @@ export const binanceProvider: MarketDataProvider = {
 
     return collected
   },
+}
+
+
+// ---------------------------------------------------------------------------
+// Live streaming
+// ---------------------------------------------------------------------------
+
+/**
+ * Binance's public combined stream. No credentials, no account.
+ *
+ * The trade stream is used rather than a kline stream: a trade is an actual
+ * execution, which is what a live PRICE means. Kline events would also work
+ * but carry a partially-formed candle, and mixing those into Tradar's
+ * historical candles is precisely the corruption this layer must avoid.
+ */
+const STREAM_BASE = "wss://stream.binance.com:9443/ws"
+
+/**
+ * Subscribes to live trades for one symbol.
+ *
+ * Returns an unsubscribe function that closes the socket. Errors are reported
+ * through `onError` rather than thrown, because a stream fails asynchronously
+ * long after subscribe() returned.
+ */
+binanceProvider.subscribeLive = async function subscribeLive(
+  providerSymbol: string,
+  onTick: (tick: LiveTick) => void,
+  onError?: (kind: LiveDisconnectKind, detail: string) => void,
+): Promise<() => void> {
+  const stream = `${STREAM_BASE}/${providerSymbol.toLowerCase()}@trade`
+  const socket = new WebSocket(stream)
+
+  socket.onmessage = (event: MessageEvent) => {
+    try {
+      const payload = JSON.parse(String(event.data)) as Record<string, unknown>
+      // Trade event: { e:"trade", E:eventTime, s:symbol, p:price, q:quantity, T:tradeTime }
+      const price = Number(payload.p)
+      const tradeTime = Number(payload.T ?? payload.E)
+      if (!Number.isFinite(price) || price <= 0) return
+      if (!Number.isFinite(tradeTime)) return
+
+      onTick({
+        symbol: String(payload.s ?? providerSymbol).toUpperCase(),
+        provider: "binance",
+        ts: new Date(tradeTime).toISOString(),
+        price,
+        // A trade stream carries no book. Left null rather than fabricated.
+        bid: null,
+        ask: null,
+        volume: Number.isFinite(Number(payload.q)) ? Number(payload.q) : null,
+      })
+    } catch {
+      onError?.("provider_error", "Malformed stream message")
+    }
+  }
+
+  socket.onerror = () => onError?.("network", "Stream connection error")
+
+  socket.onclose = (event: CloseEvent) => {
+    // 1000/1005 are ordinary closes — including our own unsubscribe — and must
+    // not be reported as provider ill-health.
+    const normal = event.code === 1000 || event.code === 1005
+    onError?.(normal ? "normal" : "network", `Stream closed (${event.code})`)
+  }
+
+  return () => {
+    try {
+      socket.close(1000, "unsubscribed")
+    } catch {
+      // Already closing; nothing to do.
+    }
+  }
 }

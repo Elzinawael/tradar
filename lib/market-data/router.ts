@@ -239,3 +239,69 @@ export function resolveProviders(
 
   return { eligible, reason: null, skippedByCircuitBreaker }
 }
+
+
+/**
+ * Resolves providers able to stream live prices for an instrument.
+ *
+ * Reuses the same eligibility rules and the same circuit breaker as historical
+ * routing — there is no second failover system. The differences are that the
+ * adapter must declare `realtime`, must actually implement subscribeLive, and
+ * the LISTING must be marked supports_realtime, so an operator can withhold
+ * streaming for an instrument without disabling its history.
+ *
+ * Timeframe is not a factor: a tick has no timeframe. Aggregating ticks into a
+ * timeframe is a separate concern from receiving them.
+ */
+export function resolveLiveProviders(
+  instrument: Instrument,
+  listings: InstrumentListing[],
+  now: number = Date.now(),
+): ResolutionResult {
+  const skippedByCircuitBreaker: string[] = []
+
+  if (!instrument.active) {
+    return { eligible: [], reason: "instrument_inactive", skippedByCircuitBreaker }
+  }
+
+  const eligible: EligibleProvider[] = []
+
+  for (const listing of listings) {
+    if (!listing.supportsRealtime) continue
+
+    const provider = getProvider(listing.provider)
+    if (!provider || !provider.capabilities.configured) continue
+    // Declaring realtime is not enough: the adapter must implement it, or the
+    // manager would call an undefined function at connect time.
+    if (!provider.capabilities.realtime) continue
+    if (typeof provider.subscribeLive !== "function") continue
+    if (!provider.capabilities.categories.includes(instrument.category)) continue
+
+    if (isCircuitOpen(listing.provider, now)) {
+      skippedByCircuitBreaker.push(listing.provider)
+      continue
+    }
+
+    eligible.push({ provider, listing })
+  }
+
+  if (eligible.length === 0) {
+    if (skippedByCircuitBreaker.length > 0) {
+      return {
+        eligible: [],
+        reason: "provider_unavailable_temporarily",
+        skippedByCircuitBreaker,
+      }
+    }
+    return { eligible: [], reason: "no_provider", skippedByCircuitBreaker }
+  }
+
+  eligible.sort((a, b) => {
+    if (a.listing.priority !== b.listing.priority) {
+      return a.listing.priority - b.listing.priority
+    }
+    return a.listing.provider.localeCompare(b.listing.provider)
+  })
+
+  return { eligible, reason: null, skippedByCircuitBreaker }
+}
