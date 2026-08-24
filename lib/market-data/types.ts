@@ -85,6 +85,7 @@ export type UnavailableReason =
   | "historical_unsupported"
   | "instrument_inactive"
   | "instrument_unsupported"
+  | "provider_unavailable_temporarily"
 
 export const UNAVAILABLE_MESSAGES: Record<UnavailableReason, string> = {
   no_provider:
@@ -98,6 +99,8 @@ export const UNAVAILABLE_MESSAGES: Record<UnavailableReason, string> = {
   instrument_inactive: "This instrument is not currently available.",
   instrument_unsupported:
     "No configured data source covers this market yet.",
+  provider_unavailable_temporarily:
+    "Market data is temporarily unavailable. Please try again shortly.",
 }
 
 /**
@@ -163,12 +166,15 @@ export interface ProviderCapabilities {
 export type ProviderErrorCode =
   | "provider_unavailable"
   | "provider_not_configured"
+  | "auth_error"
   | "rate_limited"
   | "unsupported_instrument"
   | "unsupported_timeframe"
   | "historical_data_unavailable"
   | "license_not_configured"
   | "network_error"
+  | "timeout"
+  | "empty_data"
   | "invalid_provider_response"
 
 /** Customer-facing wording. Deliberately free of provider names. */
@@ -189,6 +195,12 @@ export const PROVIDER_ERROR_MESSAGES: Record<ProviderErrorCode, string> = {
     "This data source is not licensed for use on this server.",
   network_error:
     "Market data could not be reached. Please try again shortly.",
+  auth_error:
+    "A data source rejected its credentials. An administrator has been notified.",
+  timeout:
+    "Market data is taking too long to respond. Please try again shortly.",
+  empty_data:
+    "No market data was returned for that period.",
   invalid_provider_response:
     "Market data could not be read. Please try again shortly.",
 }
@@ -216,9 +228,45 @@ export interface HistoricalRequest {
   to: Date
 }
 
+/** One provider attempt, for admin diagnostics. Never contains credentials. */
+export interface ProviderAttempt {
+  provider: string
+  ok: boolean
+  code: ProviderErrorCode | null
+}
+
+/**
+ * Internal diagnostics for an ensure/fetch cycle.
+ *
+ * Surfaced to administrators only. Deliberately carries no API key, no URL and
+ * no candle payload — just enough to explain what the router did.
+ */
+export interface FetchDiagnostics {
+  attempts: ProviderAttempt[]
+  fallbackUsed: boolean
+  candlesReceived: number
+  candlesStored: number
+  cacheHit: boolean
+  /** How many sub-ranges remain uncovered after the cycle. */
+  missingRanges: number
+  skippedByCircuitBreaker: string[]
+}
+
 export type HistoricalResult =
-  | { ok: true; candles: Candle[]; provider: string }
-  | { ok: false; reason: UnavailableReason | "provider_error"; message: string }
+  | {
+      ok: true
+      candles: Candle[]
+      provider: string
+      /** True when the requested range is not fully covered by stored data. */
+      partial?: boolean
+      diagnostics?: FetchDiagnostics
+    }
+  | {
+      ok: false
+      reason: UnavailableReason | ProviderErrorCode | "provider_error"
+      message: string
+      diagnostics?: FetchDiagnostics
+    }
 
 /** A contiguous span of stored data for one instrument/timeframe. */
 export interface Coverage {
@@ -227,4 +275,77 @@ export interface Coverage {
   candleCount: number
   first: string | null
   last: string | null
+}
+
+
+// ---------------------------------------------------------------------------
+// Failover policy
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a failure justifies trying a DIFFERENT provider.
+ *
+ * The distinction is what stops failover from being either useless or
+ * harmful:
+ *
+ *   * Transient faults — a timeout, a rate limit, a malformed body — say
+ *     nothing about whether another provider can serve the request, so trying
+ *     the next one is worthwhile.
+ *
+ *   * `unsupported_instrument` and `unsupported_timeframe` are facts about
+ *     THIS provider, not the request. Another provider may well support them,
+ *     and eligibility has already been checked, so we move on — but we do not
+ *     treat it as an outage.
+ *
+ *   * `provider_not_configured` is an operator problem. Moving to the next
+ *     eligible provider is right; counting it as a provider fault is not,
+ *     because nothing is wrong with the provider.
+ *
+ * `empty_data` is deliberately failover-safe: a provider returning nothing for
+ * a range another provider covers is a real scenario, and treating "no rows"
+ * as success is exactly how missing history gets silently accepted.
+ */
+export function isFailoverSafe(code: ProviderErrorCode): boolean {
+  switch (code) {
+    case "network_error":
+    case "timeout":
+    case "rate_limited":
+    case "provider_unavailable":
+    case "invalid_provider_response":
+    case "empty_data":
+    case "auth_error":
+    case "provider_not_configured":
+    case "license_not_configured":
+    case "unsupported_instrument":
+    case "unsupported_timeframe":
+    case "historical_data_unavailable":
+      return true
+    default:
+      return false
+  }
+}
+
+/**
+ * Whether a failure indicates the PROVIDER is unhealthy, as opposed to the
+ * request being unsuitable for it.
+ *
+ * Only these increment the circuit breaker. A provider must not be tripped
+ * because someone asked it for a symbol it never claimed to carry, or because
+ * an operator has not supplied its key — neither is a fault it can recover
+ * from by waiting.
+ */
+export function isProviderFault(code: ProviderErrorCode): boolean {
+  switch (code) {
+    case "network_error":
+    case "timeout":
+    case "rate_limited":
+    case "provider_unavailable":
+    case "invalid_provider_response":
+      return true
+    // auth_error disables the provider for THIS request (handled by the
+    // service) but is an operator/credential problem, not a transient fault,
+    // so it does not feed the breaker.
+    default:
+      return false
+  }
 }

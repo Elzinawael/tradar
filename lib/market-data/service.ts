@@ -18,15 +18,19 @@
 import { createClient } from "@/lib/supabase/server"
 import { isTimeframe, type Timeframe } from "@/lib/candles"
 import { getInstrumentBySymbol } from "./registry"
-import { getBestProvider } from "./router"
+import { resolveProviders } from "./router"
+import { runFailover } from "./failover"
 import { findMissingRanges, type StoredRange } from "./coverage"
 import { isSaneCandle } from "./provider"
 import {
+  isFailoverSafe,
   PROVIDER_ERROR_MESSAGES,
   ProviderError,
   UNAVAILABLE_MESSAGES,
   type Candle,
   type HistoricalResult,
+  type ProviderAttempt,
+  type ProviderErrorCode,
   type UnavailableReason,
 } from "./types"
 
@@ -173,13 +177,13 @@ export async function getHistoricalData(params: {
     return { ok: true, candles, provider: "cache" }
   }
 
-  const route = getBestProvider(
+  const resolution = resolveProviders(
     instrument,
     instrument.listings,
     timeframe as Timeframe,
   )
 
-  if (!route.ok) {
+  if (resolution.eligible.length === 0) {
     // No source for the gaps. If something is stored, serve that rather than
     // failing outright — partial history is more useful than none.
     if (stored.candleCount > 0) {
@@ -188,46 +192,82 @@ export async function getHistoricalData(params: {
         return { ok: true, candles, provider: "cache" }
       }
     }
-    return unavailable(route.reason)
+    return unavailable(resolution.reason ?? "no_provider")
   }
 
-  for (const gap of missing) {
-    try {
-      const fetched = await route.provider.getHistoricalCandles({
+  // ── Failover ────────────────────────────────────────────────────────────
+  // The decision sequence lives in runFailover() so it can be tested against
+  // mocked providers; this supplies the I/O. Bounded by the eligible list, so
+  // it cannot spin.
+  const outcome = await runFailover({
+    eligible: resolution.eligible,
+    missing,
+    fetchCandles: (candidate, gap) =>
+      candidate.provider.getHistoricalCandles({
         instrument,
-        listing: route.listing,
+        listing: candidate.listing,
         timeframe: timeframe as Timeframe,
         from: gap.from,
         to: gap.to,
-      })
+      }),
+    onCandles: async (fetched) => {
       await persistCandles(symbol, timeframe, fetched)
-    } catch (error) {
-      // Vendor errors are deliberately not surfaced verbatim: a customer
-      // should not see a rate-limit code, an upstream hostname or an API key
-      // problem. Adapters raise a typed ProviderError; its operator-facing
-      // detail is logged, and only the mapped message is returned.
-      if (error instanceof ProviderError) {
-        console.error(
-          `[market-data] ${route.provider.capabilities.key} ${error.code}: ${error.message}`,
-        )
-        return {
-          ok: false,
-          reason: "provider_error",
-          message: PROVIDER_ERROR_MESSAGES[error.code],
-        }
-      }
+    },
+  })
 
-      console.error("[market-data] unexpected provider failure", error)
-      return {
-        ok: false,
-        reason: "provider_error",
-        message: PROVIDER_ERROR_MESSAGES.provider_unavailable,
-      }
+  const attempts = outcome.attempts
+  const fallbackUsed = outcome.fallbackUsed
+  const candlesReceived = outcome.candlesReceived
+  const lastCode = outcome.lastCode
+  const usedProvider = outcome.provider
+
+  // ── Coverage verification ───────────────────────────────────────────────
+  // Returning rows is not the same as satisfying the request. Recompute
+  // coverage from what is actually stored, so a provider that answered with
+  // three of the seven requested days is reported as partial rather than
+  // silently accepted as complete.
+  const afterStored = await getStoredRange(symbol, timeframe)
+  const stillMissing = findMissingRanges(afterStored, from, to)
+  const candles = await readStored(symbol, timeframe, from, to)
+
+  if (candles.length === 0) {
+    return {
+      ok: false,
+      reason: lastCode ?? "provider_error",
+      message:
+        lastCode !== null
+          ? PROVIDER_ERROR_MESSAGES[lastCode]
+          : "Historical data could not be retrieved right now. Please try again shortly.",
+      diagnostics: {
+        attempts,
+        fallbackUsed,
+        candlesReceived,
+        candlesStored: 0,
+        cacheHit: false,
+        missingRanges: stillMissing.length,
+        skippedByCircuitBreaker: resolution.skippedByCircuitBreaker,
+      },
     }
   }
 
-  const candles = await readStored(symbol, timeframe, from, to)
-  return { ok: true, candles, provider: route.provider.capabilities.key }
+  return {
+    ok: true,
+    candles,
+    provider: usedProvider ?? "cache",
+    // Partial coverage is reported, never hidden. A weekend inside the range
+    // legitimately produces no bars, so this is a signal for diagnostics
+    // rather than an error on its own.
+    partial: stillMissing.length > 0,
+    diagnostics: {
+      attempts,
+      fallbackUsed,
+      candlesReceived,
+      candlesStored: candles.length,
+      cacheHit: false,
+      missingRanges: stillMissing.length,
+      skippedByCircuitBreaker: resolution.skippedByCircuitBreaker,
+    },
+  }
 }
 
 /** Availability without fetching anything, for the catalogue UI. */
@@ -248,16 +288,16 @@ export async function getAvailability(
     return { available: false, provider: null, message: UNAVAILABLE_MESSAGES.no_provider }
   }
 
-  const route = getBestProvider(
+  const resolution = resolveProviders(
     instrument,
     instrument.listings,
     timeframe as Timeframe,
   )
 
-  if (route.ok) {
+  if (resolution.eligible.length > 0) {
     return {
       available: true,
-      provider: route.provider.capabilities.label,
+      provider: resolution.eligible[0].provider.capabilities.label,
       message: null,
     }
   }
@@ -272,7 +312,7 @@ export async function getAvailability(
   return {
     available: false,
     provider: null,
-    message: UNAVAILABLE_MESSAGES[route.reason],
+    message: UNAVAILABLE_MESSAGES[resolution.reason ?? "no_provider"],
   }
 }
 
