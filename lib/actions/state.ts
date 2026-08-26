@@ -88,3 +88,27 @@ export const initialCandleImportState: CandleImportState = {
   message: null,
   imported: 0,
 }
+
+/**
+ * Result of a market-data ensure/fetch request, shown by the Replay data
+ * picker.
+ *
+ * Lives here rather than in lib/actions/market-data.ts because that file is a
+ * "use server" module: every export from one must be an async function, so the
+ * initial-state object below would fail module evaluation at runtime with
+ * "A 'use server' file can only export async functions, found object."
+ */
+export interface EnsureDataState {
+  status: "idle" | "ready" | "unavailable" | "error"
+  message: string | null
+  candleCount: number
+  /** Populated for administrators only. */
+  providerDetail: string | null
+}
+
+export const initialEnsureDataState: EnsureDataState = {
+  status: "idle",
+  message: null,
+  candleCount: 0,
+  providerDetail: null,
+}

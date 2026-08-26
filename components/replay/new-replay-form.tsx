@@ -16,14 +16,12 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { createReplaySession } from "@/lib/actions/replay"
-import {
-  ensureReplayData,
-  initialEnsureDataState,
-  type EnsureDataState,
-} from "@/lib/actions/market-data"
+import { ensureReplayData } from "@/lib/actions/market-data"
 import {
   initialBacktestState,
+  initialEnsureDataState,
   type BacktestActionState,
+  type EnsureDataState,
 } from "@/lib/actions/state"
 import { TIMEFRAMES, TIMEFRAME_LABELS } from "@/lib/candles"
 import { MARKET_CATEGORY_LABELS } from "@/lib/market-data/types"

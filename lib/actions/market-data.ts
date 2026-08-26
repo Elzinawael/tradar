@@ -4,6 +4,9 @@ import { getIsAdmin } from "@/lib/data"
 import { isTimeframe } from "@/lib/candles"
 import { ensureHistoricalData } from "@/lib/market-data/service"
 import { getInstrumentBySymbol } from "@/lib/market-data/registry"
+// Type-only import: erased at compile time, so it does not become an export of
+// this "use server" module.
+import type { EnsureDataState } from "./state"
 
 /**
  * Fetch-on-demand bridge between the Replay UI and the Market Data Engine.
@@ -26,21 +29,6 @@ import { getInstrumentBySymbol } from "@/lib/market-data/registry"
  * not which vendor failed or why — provider detail is returned only to
  * administrators, for debugging.
  */
-
-export interface EnsureDataState {
-  status: "idle" | "ready" | "unavailable" | "error"
-  message: string | null
-  candleCount: number
-  /** Populated for administrators only. */
-  providerDetail: string | null
-}
-
-export const initialEnsureDataState: EnsureDataState = {
-  status: "idle",
-  message: null,
-  candleCount: 0,
-  providerDetail: null,
-}
 
 /** Guards against a customer requesting an unbounded download. */
 const MAX_RANGE_DAYS = 400
