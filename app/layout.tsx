@@ -30,6 +30,16 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "TUNIZINA" }],
   metadataBase: new URL("https://tradar.tunizina.net"),
+  // Google Search Console ownership verification. Next renders this as
+  // <meta name="google-site-verification" ...> in the document head, so no
+  // component hardcodes it and no client-side JavaScript is involved.
+  //
+  // This token is not a secret: it is served publicly in the HTML of every
+  // page by design, and only proves domain ownership to Google. It grants no
+  // access to anything.
+  verification: {
+    google: "SQT5-aU2yFDjE1iwcjizLoeHdD5COyO6T-l6lAOQxU8",
+  },
 }
 
 export const viewport: Viewport = {
