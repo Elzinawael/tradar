@@ -22,6 +22,9 @@ import {
 } from "./replay-chart"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { SmartPriceLevels } from "@/components/ui/smart-input"
+import { toPlainString } from "@/lib/smart-input/number-field"
+import { mirrorAcross, suggestStop, suggestTarget } from "@/lib/smart-input/price-levels"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
@@ -85,6 +88,12 @@ interface ReplayPlayerProps {
   replayTrades: SimulatedTrade[]
   /** The resting order for this replay, or null when there is none. */
   pendingOrder: ReplayOrder | null
+  /**
+   * Decimal precision for this instrument's prices, from the registry (or a
+   * data-derived fallback). Drives the Smart Input step and formatting only —
+   * no calculation depends on it.
+   */
+  pricePrecision?: number
 }
 
 export function ReplayPlayer({
@@ -96,6 +105,7 @@ export function ReplayPlayer({
   strategies,
   replayTrades,
   pendingOrder,
+  pricePrecision = 2,
 }: ReplayPlayerProps) {
   const router = useRouter()
   const [cursorTs, setCursorTs] = useState(replay.cursorTs)
@@ -111,6 +121,10 @@ export function ReplayPlayer({
     [candles, cursorTs],
   )
   const current = visible[visible.length - 1] ?? null
+
+  // The price at the server-authoritative cursor. Declared early so the order
+  // ticket can seed its stop from it.
+  const currentPrice = current?.close ?? null
 
   // Guards against overlapping advance calls when a tick is slower than the
   // interval, which would otherwise skip bars or evaluate them out of order.
@@ -179,8 +193,20 @@ export function ReplayPlayer({
 
   // --- order ticket -------------------------------------------------------
   const [direction, setDirection] = useState<"long" | "short">("long")
-  const [stopPrice, setStopPrice] = useState("")
+  // Seeded from the cursor price so the ticket opens ready to adjust, not
+  // blank. A market long with a 0.25%-below stop; the user drags or types from
+  // there, and flipping direction mirrors it to the correct side.
+  const [stopPrice, setStopPrice] = useState(() =>
+    currentPrice !== null
+      ? toPlainString(
+          suggestStop(currentPrice, "long", pricePrecision),
+          pricePrecision,
+        )
+      : "",
+  )
   const [takeProfit, setTakeProfit] = useState("")
+  const [targetEnabled, setTargetEnabled] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
   const [tags, setTags] = useState("")
   const [orderType, setOrderType] = useState<OrderType>("market")
   const [requestedPrice, setRequestedPrice] = useState("")
@@ -197,10 +223,18 @@ export function ReplayPlayer({
     })
   }, [])
 
-  // The price at the server-authoritative cursor. Used for display and for
-  // marking the open position to market; the server recomputes it from the
-  // same candle when the position actually closes.
-  const currentPrice = current?.close ?? null
+  // Draft ticket levels, parsed once. Declared here so the chart can reflect
+  // what the trader is currently setting up.
+  const stop = stopPrice.trim() === "" ? null : Number(stopPrice)
+  const target =
+    !targetEnabled || takeProfit.trim() === "" ? null : Number(takeProfit)
+  const requested =
+    requestedPrice.trim() === "" ? null : Number(requestedPrice)
+
+  // The price SL/TP are measured against — the same reference
+  // validateOrderLevels uses. Feeds the Smart Input reference marker and reset.
+  const levelReference =
+    orderType === "market" ? currentPrice : requested ?? currentPrice
 
   /**
    * Open-position levels for the chart. Returns an empty array when flat, which
@@ -233,7 +267,27 @@ export function ReplayPlayer({
       return levels
     }
 
-    if (!openPosition) return levels
+    if (!openPosition) {
+      // Draft ticket — the chart mirrors the levels the trader is setting up.
+      if (
+        orderType !== "market" &&
+        requested !== null &&
+        Number.isFinite(requested)
+      ) {
+        levels.push({
+          price: requested,
+          label: `${orderType.toUpperCase()} ${direction === "long" ? "L" : "S"}`,
+          kind: "entry",
+        })
+      }
+      if (stop !== null && Number.isFinite(stop)) {
+        levels.push({ price: stop, label: "SL", kind: "stop" })
+      }
+      if (target !== null && Number.isFinite(target)) {
+        levels.push({ price: target, label: "TP", kind: "target" })
+      }
+      return levels
+    }
 
     levels.push({
       price: openPosition.entryPrice,
@@ -247,7 +301,16 @@ export function ReplayPlayer({
       levels.push({ price: openPosition.takeProfit, label: "TP", kind: "target" })
     }
     return levels
-  }, [openPosition, currentPrice, pendingOrder])
+  }, [
+    openPosition,
+    currentPrice,
+    pendingOrder,
+    orderType,
+    direction,
+    requested,
+    stop,
+    target,
+  ])
 
   /**
    * Entry and exit markers, built from stored entry_candle_ts / exit_candle_ts
@@ -322,12 +385,76 @@ export function ReplayPlayer({
     })
   }, [openPosition, currentPrice])
 
-  const entryPrice = current?.close ?? null
-  const stop = stopPrice.trim() === "" ? null : Number(stopPrice)
-  const target = takeProfit.trim() === "" ? null : Number(takeProfit)
+  /** Enable/disable the optional take profit, initialising it near the entry. */
+  /** Switch order type, seeding the entry price for limit/stop orders. */
+  const changeOrderType = useCallback(
+    (next: OrderType) => {
+      setOrderType(next)
+      if (
+        next !== "market" &&
+        requestedPrice.trim() === "" &&
+        currentPrice !== null
+      ) {
+        // A limit rests slightly better than now, a stop slightly worse — a
+        // small nudge off the current price so it is not instantly wrong-side.
+        const sign =
+          next === "limit"
+            ? direction === "long"
+              ? -1
+              : 1
+            : direction === "long"
+              ? 1
+              : -1
+        setRequestedPrice(
+          toPlainString(currentPrice * (1 + sign * 0.001), pricePrecision),
+        )
+      }
+    },
+    [requestedPrice, currentPrice, direction, pricePrecision],
+  )
 
-  const requested =
-    requestedPrice.trim() === "" ? null : Number(requestedPrice)
+  const toggleTarget = useCallback(
+    (enabled: boolean) => {
+      setTargetEnabled(enabled)
+      if (!enabled) {
+        setTakeProfit("")
+        return
+      }
+      if (takeProfit.trim() === "" && levelReference !== null) {
+        setTakeProfit(
+          toPlainString(
+            suggestTarget(levelReference, direction, pricePrecision),
+            pricePrecision,
+          ),
+        )
+      }
+    },
+    [takeProfit, levelReference, direction, pricePrecision],
+  )
+
+  /**
+   * Flip the trade direction, mirroring any set stop/target across the entry so
+   * they keep the same risk distance on the correct new side.
+   */
+  const flipDirection = useCallback(
+    (next: "long" | "short") => {
+      if (next === direction) return
+      if (levelReference !== null) {
+        const mirror = (v: string) => {
+          const n = Number(v)
+          if (v.trim() === "" || !Number.isFinite(n)) return v
+          return toPlainString(
+            mirrorAcross(levelReference, n, pricePrecision),
+            pricePrecision,
+          )
+        }
+        setStopPrice(mirror)
+        setTakeProfit(mirror)
+      }
+      setDirection(next)
+    },
+    [direction, levelReference, pricePrecision],
+  )
 
   const levelErrors = useMemo(() => {
     if (currentPrice === null) return {}
@@ -371,6 +498,8 @@ export function ReplayPlayer({
       } else {
         setStopPrice("")
         setTakeProfit("")
+        setTargetEnabled(false)
+        setShowDetails(false)
         setTags("")
         setRequestedPrice("")
         setNotice(
@@ -751,6 +880,7 @@ export function ReplayPlayer({
 
               <input type="hidden" name="orderType" value={orderType} />
 
+              {/* Order controls — compact row */}
               <div className="flex flex-wrap items-end gap-3">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="orderType" className="text-xs">
@@ -758,7 +888,7 @@ export function ReplayPlayer({
                   </Label>
                   <Select
                     value={orderType}
-                    onValueChange={(v) => setOrderType(v as OrderType)}
+                    onValueChange={(v) => changeOrderType(v as OrderType)}
                   >
                     <SelectTrigger id="orderType" className="h-9 w-[130px]">
                       <SelectValue />
@@ -770,31 +900,6 @@ export function ReplayPlayer({
                     </SelectContent>
                   </Select>
                 </div>
-
-                {orderType !== "market" && (
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="requestedPrice" className="text-xs">
-                      {orderType === "limit" ? "Limit price" : "Stop entry price"}
-                    </Label>
-                    <Input
-                      id="requestedPrice"
-                      name="requestedPrice"
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={requestedPrice}
-                      onChange={(e) => setRequestedPrice(e.target.value)}
-                      placeholder={orderType === "limit" ? "Below price" : "Above price"}
-                      className="h-9 w-[160px]"
-                      aria-invalid={Boolean(levelErrors.requestedPrice)}
-                    />
-                    {levelErrors.requestedPrice && (
-                      <p className="text-xs text-negative">
-                        {levelErrors.requestedPrice}
-                      </p>
-                    )}
-                  </div>
-                )}
 
                 {orderType !== "market" && (
                   <div className="flex flex-col gap-1.5">
@@ -815,85 +920,89 @@ export function ReplayPlayer({
                   </div>
                 )}
 
-                <div className="flex gap-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={direction === "long" ? "default" : "outline"}
-                    onClick={() => setDirection("long")}
-                    className={cn(
-                      direction === "long" &&
-                        "bg-positive text-background hover:bg-positive/90",
-                    )}
-                  >
-                    <TrendingUp className="size-4" />
-                    Long
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={direction === "short" ? "default" : "outline"}
-                    onClick={() => setDirection("short")}
-                    className={cn(
-                      direction === "short" &&
-                        "bg-negative text-background hover:bg-negative/90",
-                    )}
-                  >
-                    <TrendingDown className="size-4" />
-                    Short
-                  </Button>
-                </div>
-
                 <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="stopPrice" className="text-xs">
-                    Stop loss
-                  </Label>
-                  <Input
-                    id="stopPrice"
-                    name="stopPrice"
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={stopPrice}
-                    onChange={(e) => setStopPrice(e.target.value)}
-                    placeholder="Required"
-                    className="h-9 w-[160px]"
-                    aria-invalid={Boolean(levelErrors.stopPrice)}
-                  />
-                  {levelErrors.stopPrice && (
-                    <p className="text-xs text-negative">
-                      {levelErrors.stopPrice}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="takeProfit" className="text-xs">
-                    Take profit
-                  </Label>
-                  <Input
-                    id="takeProfit"
-                    name="takeProfit"
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={takeProfit}
-                    onChange={(e) => setTakeProfit(e.target.value)}
-                    placeholder="Optional"
-                    className="h-9 w-[160px]"
-                    aria-invalid={Boolean(levelErrors.takeProfit)}
-                  />
-                  {levelErrors.takeProfit && (
-                    <p className="text-xs text-negative">
-                      {levelErrors.takeProfit}
-                    </p>
-                  )}
+                  <Label className="text-xs">Direction</Label>
+                  <div className="flex gap-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={direction === "long" ? "default" : "outline"}
+                      onClick={() => flipDirection("long")}
+                      aria-pressed={direction === "long"}
+                      className={cn(
+                        direction === "long" &&
+                          "bg-positive text-background hover:bg-positive/90",
+                      )}
+                    >
+                      <TrendingUp className="size-4" />
+                      Long
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={direction === "short" ? "default" : "outline"}
+                      onClick={() => flipDirection("short")}
+                      aria-pressed={direction === "short"}
+                      className={cn(
+                        direction === "short" &&
+                          "bg-negative text-background hover:bg-negative/90",
+                      )}
+                    >
+                      <TrendingDown className="size-4" />
+                      Short
+                    </Button>
+                  </div>
                 </div>
               </div>
 
-              {/* Classification. Optional — a trader should not be forced to
-                  grade every trade — but recorded before the position opens so
-                  the analytics breakdown has something to group by. */}
+              {/* Unified Entry / SL / TP price system */}
+              <SmartPriceLevels
+                direction={direction}
+                precision={pricePrecision}
+                referencePrice={currentPrice}
+                entryEditable={orderType !== "market"}
+                entryValue={requestedPrice}
+                onEntryChange={setRequestedPrice}
+                entryName="requestedPrice"
+                entryLabel={
+                  orderType === "limit" ? "Limit price" : "Stop entry price"
+                }
+                entryError={levelErrors.requestedPrice}
+                stopValue={stopPrice}
+                onStopChange={setStopPrice}
+                stopName="stopPrice"
+                stopError={levelErrors.stopPrice}
+                targetEnabled={targetEnabled}
+                onToggleTarget={toggleTarget}
+                targetValue={takeProfit}
+                onTargetChange={setTakeProfit}
+                targetName="takeProfit"
+                targetError={levelErrors.takeProfit}
+                stats={{
+                  riskPercent,
+                  riskAmount,
+                  positionSize: quantity,
+                }}
+              />
+
+              {/* Classification & notes — optional, hidden until asked for.
+                  The fields stay mounted (so they still submit and keep their
+                  value) and are only visually collapsed. */}
+              <button
+                type="button"
+                onClick={() => setShowDetails((v) => !v)}
+                aria-expanded={showDetails}
+                className="flex w-fit items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {showDetails ? (
+                  <ChevronRight className="size-4 rotate-90" />
+                ) : (
+                  <ChevronRight className="size-4" />
+                )}
+                {showDetails ? "Hide details" : "Add strategy, tags & notes"}
+              </button>
+
+              <div className={cn("flex flex-col gap-4", !showDetails && "hidden")}>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="strategyId" className="text-xs">
@@ -993,31 +1102,13 @@ export function ReplayPlayer({
                   placeholder="4H bias bearish, 15M FVG, liquidity sweep before entry."
                 />
               </div>
-
-              <div className="flex flex-wrap items-center gap-4 rounded-md border border-border bg-muted/20 p-3 text-xs">
-                <span className="text-muted-foreground">
-                  Entry{" "}
-                  <span className="font-mono text-foreground">
-                    {entryPrice ?? "—"}
-                  </span>
-                </span>
-                <span className="text-muted-foreground">
-                  Risk{" "}
-                  <span className="font-mono text-foreground">
-                    {formatCurrency(riskAmount)} ({riskPercent}%)
-                  </span>
-                </span>
-                <span className="text-muted-foreground">
-                  Size{" "}
-                  <span className="font-mono text-foreground">
-                    {quantity ?? "—"}
-                  </span>
-                </span>
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <Target className="size-3.5" />
-                  Exit is decided by the market, not entered by you.
-                </span>
               </div>
+
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Target className="size-3.5 shrink-0" />
+                The engine closes the position when a candle reaches your stop or
+                target — the exit is decided by the market, not entered by you.
+              </p>
 
               <div>
                 <Button
@@ -1025,7 +1116,7 @@ export function ReplayPlayer({
                   disabled={
                     busy ||
                     quantity === null ||
-                    entryPrice === null ||
+                    currentPrice === null ||
                     Object.keys(levelErrors).length > 0
                   }
                   className={cn(

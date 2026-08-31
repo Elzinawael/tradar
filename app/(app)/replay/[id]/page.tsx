@@ -22,6 +22,8 @@ import {
   getSimulatedTrades,
 } from "@/lib/data"
 import { breadcrumbTrail } from "@/lib/navigation"
+import { getInstrumentBySymbol } from "@/lib/market-data/registry"
+import { resolvePricePrecision } from "@/lib/smart-input/instrument-config"
 import { deleteReplaySession } from "@/lib/actions/replay"
 import { formatCurrency, formatPercent } from "@/lib/utils"
 
@@ -40,7 +42,7 @@ export default async function ReplayDetailPage({
   const session = await getBacktestSessionById(replay.sessionId)
   if (!session) notFound()
 
-  const [candles, trades, openPosition, strategies, pendingOrder, orders] =
+  const [candles, trades, openPosition, strategies, pendingOrder, orders, instrument] =
     await Promise.all([
     // Bounded to the replay's own window: candles outside the selected range
     // are never fetched, so they cannot reach the client at all.
@@ -56,7 +58,15 @@ export default async function ReplayDetailPage({
     getStrategies(),
     getPendingReplayOrder(replay.id),
     getReplayOrders(replay.id),
+    // Registry metadata for price-field precision (display only). May be null
+    // for a CSV-imported symbol; a data-derived fallback covers that.
+    getInstrumentBySymbol(replay.symbol),
   ])
+
+  const pricePrecision = resolvePricePrecision(
+    instrument?.pricePrecision,
+    candles.slice(-200).map((c) => c.close),
+  )
 
   const { summary } = await getSessionPerformance(session, trades)
 
@@ -153,6 +163,7 @@ export default async function ReplayDetailPage({
           strategies={strategies}
           replayTrades={replayTrades}
           pendingOrder={pendingOrder}
+          pricePrecision={pricePrecision}
         />
       )}
 

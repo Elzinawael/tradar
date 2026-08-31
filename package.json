@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "test": "node --test \"lib/**/*.test.mjs\"",
     "db:test": "bash supabase/tests/run.sh"
   },
   "dependencies": {

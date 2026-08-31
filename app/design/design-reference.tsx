@@ -11,6 +11,12 @@ import { Input } from "@/components/ui/input"
 import { SearchInput } from "@/components/ui/search-input"
 import { SegmentedControl } from "@/components/ui/segmented-control"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  SmartPercentInput,
+  SmartPriceInput,
+  SmartPriceLevels,
+  SmartQuantityInput,
+} from "@/components/ui/smart-input"
 import { Stat, StatGrid } from "@/components/ui/stat"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -69,6 +75,14 @@ function Swatch({ token }: { token: string }) {
 export function DesignReference() {
   const [timeframe, setTimeframe] = useState("H1")
   const [side, setSide] = useState("long")
+  const [tp, setTp] = useState("")
+  const [sl, setSl] = useState("5025.00")
+  const [risk, setRisk] = useState("1")
+  const [qty, setQty] = useState("")
+  const [levelDir, setLevelDir] = useState<"long" | "short">("long")
+  const [levelStop, setLevelStop] = useState("4987.50")
+  const [levelTarget, setLevelTarget] = useState("")
+  const [levelTargetOn, setLevelTargetOn] = useState(false)
 
   return (
     <div className="mx-auto max-w-5xl space-y-12 px-6 py-10">
@@ -286,6 +300,130 @@ export function DesignReference() {
             Default in-component icon size is <code>size-4</code>.
           </span>
         </div>
+      </Section>
+
+      <Section title="Smart Inputs (Phase 3)">
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Type directly, use ArrowUp / ArrowDown (Shift ×10, PageUp/Down ×10),
+          drag the slider, or reset to the reference. The reference here is a
+          fixed mock price — in the app it comes from the live / replay /
+          backtest context. A changing reference never overwrites a value you
+          typed.
+        </p>
+        <Card>
+          <CardContent className="grid gap-5 pt-6 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="Take profit" htmlFor="d-tp">
+              <SmartPriceInput
+                id="d-tp"
+                ariaLabel="Take profit"
+                value={tp}
+                onValueChange={setTp}
+                precision={2}
+                referenceValue={5000}
+                placeholder="Optional"
+              />
+            </Field>
+            <Field label="Stop loss" htmlFor="d-sl">
+              <SmartPriceInput
+                id="d-sl"
+                ariaLabel="Stop loss"
+                value={sl}
+                onValueChange={setSl}
+                precision={2}
+                referenceValue={5000}
+                slider={{ max: 5000 }}
+              />
+            </Field>
+            <Field
+              label="Entry (EURUSD, precision 5)"
+              htmlFor="d-entry"
+              hint="Finer precision + step from instrument metadata."
+            >
+              <SmartPriceInput
+                id="d-entry"
+                ariaLabel="Entry price"
+                value=""
+                onValueChange={() => {}}
+                precision={5}
+                referenceValue={1.10485}
+                placeholder="1.10485"
+              />
+            </Field>
+            <Field label="Risk per trade" htmlFor="d-risk">
+              <SmartPercentInput
+                id="d-risk"
+                ariaLabel="Risk per trade"
+                value={risk}
+                onValueChange={setRisk}
+                referenceValue={1}
+                precision={2}
+                step={0.25}
+              />
+            </Field>
+            <Field label="Quantity" htmlFor="d-qty">
+              <SmartQuantityInput
+                id="d-qty"
+                ariaLabel="Quantity"
+                value={qty}
+                onValueChange={setQty}
+                precision={2}
+                placeholder="0.00"
+              />
+            </Field>
+            <Field label="Invalid state" htmlFor="d-invalid-num" error="Required.">
+              <SmartPriceInput
+                id="d-invalid-num"
+                ariaLabel="Invalid example"
+                value=""
+                onValueChange={() => {}}
+                precision={2}
+                referenceValue={5000}
+                invalid
+              />
+            </Field>
+          </CardContent>
+        </Card>
+      </Section>
+
+      <Section title="Smart price levels (Phase 3B)">
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Entry / Stop / Take-profit as one price system. Drag a marker on the
+          axis or type a value; the risk (red) and reward (green) zones update
+          live. Flip the direction and the levels mirror to the correct side.
+          Take profit is optional. Reference price is a fixed mock here.
+        </p>
+        <Card>
+          <CardContent className="space-y-4 pt-6">
+            <SegmentedControl
+              aria-label="Direction"
+              size="sm"
+              value={levelDir}
+              onValueChange={(v) => setLevelDir(v as "long" | "short")}
+              options={[
+                { value: "long", label: "Long" },
+                { value: "short", label: "Short" },
+              ]}
+            />
+            <SmartPriceLevels
+              direction={levelDir}
+              precision={2}
+              referencePrice={5000}
+              stopValue={levelStop}
+              onStopChange={setLevelStop}
+              stopName="d-levels-stop"
+              targetEnabled={levelTargetOn}
+              onToggleTarget={(on) => {
+                setLevelTargetOn(on)
+                if (on && levelTarget.trim() === "") setLevelTarget("5025.00")
+                if (!on) setLevelTarget("")
+              }}
+              targetValue={levelTarget}
+              onTargetChange={setLevelTarget}
+              targetName="d-levels-target"
+              stats={{ riskPercent: 1, riskAmount: 100, positionSize: 0.2 }}
+            />
+          </CardContent>
+        </Card>
       </Section>
     </div>
   )
