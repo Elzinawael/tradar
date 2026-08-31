@@ -20,6 +20,7 @@ import {
   getSimulatedTrades,
   getStrategies,
 } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 import { deleteBacktestSession } from "@/lib/actions/backtesting"
 import { formatDuration } from "@/lib/trade-math"
 import { cn, formatCurrency, formatPercent } from "@/lib/utils"
@@ -121,6 +122,9 @@ export default async function BacktestSessionPage({
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail("/backtesting/sessions", {
+          label: session.name,
+        })}
         title={session.name}
         description={
           [session.symbol, session.timeframe].filter(Boolean).join(" · ") ||

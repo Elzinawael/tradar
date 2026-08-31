@@ -33,6 +33,14 @@
   --destructive: oklch(0.62 0.2 20);
   --destructive-foreground: oklch(0.98 0.006 260);
 
+  /* Status semantics beyond performance. `warning` is pushed toward orange so
+     it never reads as the gold `--primary`; `info` is a calm blue, matching
+     the pending-order accent already used on the replay chart. */
+  --warning: oklch(0.76 0.14 62);
+  --warning-foreground: oklch(0.22 0.04 62);
+  --info: oklch(0.7 0.11 240);
+  --info-foreground: oklch(0.98 0.006 260);
+
   --border: oklch(0.28 0.014 258);
   --input: oklch(0.3 0.014 258);
   --ring: oklch(0.79 0.13 82);
@@ -43,6 +51,17 @@
   --negative: oklch(0.65 0.2 22);
   --negative-foreground: oklch(0.98 0.006 260);
   --neutral: oklch(0.66 0.012 260);
+
+  /* Text hierarchy — a third step below --muted-foreground for the least
+     important text (was written ad hoc as text-muted-foreground/70). */
+  --text-tertiary: oklch(0.52 0.012 260);
+
+  /* Semantic surface aliases documenting the existing elevation ramp. They
+     alias current values, so nothing changes visually; new components should
+     reference these rather than picking --card / --popover / --accent by hand. */
+  --surface-1: var(--card);
+  --surface-2: var(--popover);
+  --surface-3: var(--accent);
 
   /* Chart palette */
   --chart-1: oklch(0.79 0.13 82);
@@ -91,6 +110,14 @@
   --color-negative: var(--negative);
   --color-negative-foreground: var(--negative-foreground);
   --color-neutral: var(--neutral);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
 
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
@@ -142,5 +169,25 @@
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background-color: var(--border);
     border-radius: 9999px;
+  }
+
+  /*
+   * Canonical micro-label / eyebrow. Replaces the ad hoc mix of
+   * text-[10px] / text-[11px] + uppercase + tracking used across metric
+   * cards, stat grids and section headers.
+   */
+  .label-eyebrow {
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-foreground);
+  }
+
+  /* 11px step, sitting below Tailwind's text-xs (12px). */
+  .text-2xs {
+    font-size: 0.6875rem;
+    line-height: 1rem;
   }
 }

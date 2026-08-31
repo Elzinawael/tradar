@@ -2,34 +2,39 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { BarChart3, BookOpen, LayoutDashboard, ListChecks, Target } from "lucide-react"
+import { Menu } from "lucide-react"
+import { activeNavHref, primaryNavItems } from "@/lib/navigation"
 import { cn } from "@/lib/utils"
 
-const items = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Trades", href: "/trades", icon: ListChecks },
-  { label: "Journal", href: "/journal", icon: BookOpen },
-  { label: "Reports", href: "/reports", icon: BarChart3 },
-  { label: "Strategies", href: "/strategies", icon: Target },
-]
+interface MobileTabbarProps {
+  /** Opens the full navigation drawer (the same Sheet the topbar opens). */
+  onOpenNav: () => void
+}
 
-export function MobileTabbar() {
+/**
+ * Bottom navigation on mobile. Shows the `primary` destinations from
+ * lib/navigation.ts plus a "Menu" button for the complete navigation, so no
+ * route becomes unreachable on small screens.
+ */
+export function MobileTabbar({ onOpenNav }: MobileTabbarProps) {
   const pathname = usePathname()
+  const active = activeNavHref(pathname)
+
   return (
     <nav
       className="fixed inset-x-0 bottom-0 z-30 flex h-16 items-stretch border-t border-border bg-background/95 backdrop-blur lg:hidden"
-      aria-label="Primary mobile"
+      aria-label="Primary"
     >
-      {items.map((item) => {
-        const active = pathname === item.href || pathname.startsWith(`${item.href}/`)
+      {primaryNavItems.map((item) => {
+        const isActive = item.href === active
         return (
           <Link
             key={item.href}
             href={item.href}
-            aria-current={active ? "page" : undefined}
+            aria-current={isActive ? "page" : undefined}
             className={cn(
-              "flex flex-1 flex-col items-center justify-center gap-1 text-[10px] font-medium transition-colors",
-              active ? "text-primary" : "text-muted-foreground",
+              "flex flex-1 flex-col items-center justify-center gap-1 text-2xs font-medium transition-colors",
+              isActive ? "text-primary" : "text-muted-foreground",
             )}
           >
             <item.icon className="size-5" />
@@ -37,6 +42,15 @@ export function MobileTabbar() {
           </Link>
         )
       })}
+      <button
+        type="button"
+        onClick={onOpenNav}
+        aria-label="Open navigation menu"
+        className="flex flex-1 flex-col items-center justify-center gap-1 text-2xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Menu className="size-5" />
+        Menu
+      </button>
     </nav>
   )
 }

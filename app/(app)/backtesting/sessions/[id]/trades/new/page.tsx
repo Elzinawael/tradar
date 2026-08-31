@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { PageHeader } from "@/components/page-header"
 import { SimulatedTradeForm } from "@/components/backtesting/simulated-trade-form"
 import { getBacktestSessionById, getStrategies } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 
 export const metadata: Metadata = { title: "Add simulated trade" }
 
@@ -22,6 +23,11 @@ export default async function NewSimulatedTradePage({
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail(
+          "/backtesting/sessions",
+          { label: session.name, href: `/backtesting/sessions/${session.id}` },
+          { label: "Add trade" },
+        )}
         title="Add simulated trade"
         description={`Recording a hypothetical execution in ${session.name}.`}
       />

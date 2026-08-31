@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { PageHeader } from "@/components/page-header"
 import { TradeForm } from "@/components/trades/trade-form"
 import { getAccounts, getStrategies, getTradeById } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 
 export const metadata: Metadata = { title: "Edit trade" }
 
@@ -24,6 +25,11 @@ export default async function EditTradePage({
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail(
+          "/trades",
+          { label: trade.symbol, href: `/trades/${trade.id}` },
+          { label: "Edit" },
+        )}
         title={`Edit ${trade.symbol}`}
         description="Update the execution details. Derived values are recalculated on save."
       />

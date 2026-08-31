@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { navSections } from "@/lib/navigation"
+import { activeNavHref, navSections } from "@/lib/navigation"
 import { cn } from "@/lib/utils"
 import {
   Tooltip,
@@ -16,50 +16,54 @@ interface SidebarNavProps {
   onNavigate?: () => void
 }
 
-function isActive(pathname: string, href: string) {
-  const base = href.split("?")[0]
-  if (base === "/dashboard") return pathname === base
-  return pathname === base || pathname.startsWith(`${base}/`)
-}
-
 export function SidebarNav({ collapsed, onNavigate }: SidebarNavProps) {
   const pathname = usePathname()
+  const active = activeNavHref(pathname)
 
   return (
     <TooltipProvider delayDuration={0}>
-      <nav className="flex flex-col gap-6 px-3 py-4" aria-label="Primary">
-        {navSections.map((section) => (
-          <div key={section.title} className="flex flex-col gap-1">
-            {!collapsed && (
-              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+      <nav className="flex flex-col gap-5 px-3 py-4" aria-label="Primary">
+        {navSections.map((section, sectionIndex) => (
+          <div
+            key={section.title ?? `section-${sectionIndex}`}
+            className={cn(
+              "flex flex-col gap-1",
+              // The trailing utility group is set off by a rule, not a heading.
+              !section.title && "border-t border-sidebar-border pt-4",
+            )}
+          >
+            {section.title && !collapsed && (
+              <p className="px-3 pb-1 text-2xs font-semibold uppercase tracking-wider text-sidebar-foreground/45">
                 {section.title}
               </p>
             )}
             {section.items.map((item) => {
-              const active = isActive(pathname, item.href)
+              const isActive = item.href === active
               const link = (
                 <Link
                   key={item.href}
                   href={item.href}
                   onClick={onNavigate}
-                  aria-current={active ? "page" : undefined}
+                  aria-current={isActive ? "page" : undefined}
                   className={cn(
                     "group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                     collapsed && "justify-center px-0",
-                    active
+                    isActive
                       ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+                      : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
                   )}
                 >
                   <item.icon
                     className={cn(
                       "size-4 shrink-0",
-                      active ? "text-primary" : "text-muted-foreground group-hover:text-foreground",
+                      isActive
+                        ? "text-primary"
+                        : "text-muted-foreground group-hover:text-sidebar-foreground",
                     )}
                   />
                   {!collapsed && <span className="truncate">{item.label}</span>}
-                  {active && !collapsed && (
-                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                  {isActive && !collapsed && (
+                    <span className="ml-auto size-1.5 shrink-0 rounded-full bg-primary" />
                   )}
                 </Link>
               )

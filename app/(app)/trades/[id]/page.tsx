@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { getTradeById } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 import { deleteTrade } from "@/lib/actions/trades"
 import { formatDuration } from "@/lib/trade-math"
 import { cn, formatCurrency } from "@/lib/utils"
@@ -38,6 +39,9 @@ export default async function TradeDetailPage({
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail("/trades", {
+          label: `${trade.symbol} ${trade.direction}`,
+        })}
         title={`${trade.symbol} ${trade.direction}`}
         description={new Date(trade.openedAt).toLocaleString("en-US", {
           dateStyle: "medium",

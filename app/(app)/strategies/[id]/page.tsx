@@ -6,6 +6,7 @@ import { MetricCard } from "@/components/metric-card"
 import { StrategyForm } from "@/components/strategies/strategy-form"
 import { Button } from "@/components/ui/button"
 import { getStrategyById } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 import { deleteStrategy } from "@/lib/actions/strategies"
 import { formatCurrency, formatPercent } from "@/lib/utils"
 
@@ -24,6 +25,7 @@ export default async function StrategyPage({
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail("/strategies", { label: strategy.name })}
         title={strategy.name}
         description="Performance is derived from the trades attached to this strategy."
         actions={

@@ -9,6 +9,7 @@ import {
   getSimulatedTradeById,
   getStrategies,
 } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 import { deleteSimulatedTrade } from "@/lib/actions/backtesting"
 
 export const metadata: Metadata = { title: "Edit simulated trade" }
@@ -32,6 +33,11 @@ export default async function EditSimulatedTradePage({
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail(
+          "/backtesting/sessions",
+          { label: session.name, href: `/backtesting/sessions/${session.id}` },
+          { label: trade.symbol },
+        )}
         title={`Edit ${trade.symbol}`}
         description={`Simulated trade in ${session.name}.`}
         actions={

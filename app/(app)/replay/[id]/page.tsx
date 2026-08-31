@@ -21,6 +21,7 @@ import {
   getSessionPerformance,
   getSimulatedTrades,
 } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 import { deleteReplaySession } from "@/lib/actions/replay"
 import { formatCurrency, formatPercent } from "@/lib/utils"
 
@@ -70,6 +71,9 @@ export default async function ReplayDetailPage({
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail("/replay", {
+          label: `${replay.symbol} replay`,
+        })}
         title={`${replay.symbol} replay`}
         description={`${replay.timeframe} · ${new Date(replay.rangeStart).toLocaleDateString()} — ${new Date(replay.rangeEnd).toLocaleDateString()}`}
         actions={

@@ -82,4 +82,27 @@ export default [
       "no-unused-vars": "off",
     },
   },
+  {
+    /*
+     * Design-system guardrail: components must draw colour from tokens
+     * (`bg-positive`, `var(--border)`, …), not raw hex. The chart color module
+     * and the replay chart are exempt because canvas colours have to be
+     * concrete strings and the sRGB fallbacks live there deliberately.
+     *
+     * Scoped to raw 6-digit hex only, so it does not fire on Tailwind
+     * arbitrary values or short hex used elsewhere.
+     */
+    files: ["components/**/*.{ts,tsx}"],
+    ignores: ["components/replay/replay-chart.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "warn",
+        {
+          selector: "Literal[value=/#[0-9a-fA-F]{6}/]",
+          message:
+            "Use a design token instead of a raw hex colour (see app/globals.css / lib/charts/theme.ts).",
+        },
+      ],
+    },
+  },
 ]

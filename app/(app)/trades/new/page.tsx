@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/page-header"
 import { EmptyState } from "@/components/empty-state"
 import { TradeForm } from "@/components/trades/trade-form"
 import { getAccounts, getStrategies } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 import { Wallet } from "lucide-react"
 
 export const metadata: Metadata = { title: "Log a trade" }
@@ -16,6 +17,7 @@ export default async function NewTradePage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail("/trades", { label: "Log a trade" })}
         title="Log a trade"
         description="Record an execution. P&L, status, duration and R-multiple are calculated for you."
       />

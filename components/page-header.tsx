@@ -1,3 +1,5 @@
+import { Breadcrumbs } from "@/components/app-shell/breadcrumbs"
+import type { Crumb } from "@/lib/navigation"
 import { cn } from "@/lib/utils"
 
 interface PageHeaderProps {
@@ -6,6 +8,8 @@ interface PageHeaderProps {
   actions?: React.ReactNode
   children?: React.ReactNode
   className?: string
+  /** Deep routes only. Rendered above the title; top-level pages omit it. */
+  breadcrumbs?: Crumb[]
 }
 
 export function PageHeader({
@@ -14,6 +18,7 @@ export function PageHeader({
   actions,
   children,
   className,
+  breadcrumbs,
 }: PageHeaderProps) {
   return (
     <div
@@ -23,6 +28,9 @@ export function PageHeader({
       )}
     >
       <div className="min-w-0">
+        {breadcrumbs && breadcrumbs.length > 0 && (
+          <Breadcrumbs items={breadcrumbs} className="mb-2" />
+        )}
         <h1 className="text-balance text-xl font-semibold tracking-tight md:text-2xl">
           {title}
         </h1>

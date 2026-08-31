@@ -9,6 +9,7 @@ import {
   type InstrumentOption,
 } from "@/components/replay/new-replay-form"
 import { getBacktestSessionList, getCandleCatalog } from "@/lib/data"
+import { breadcrumbTrail } from "@/lib/navigation"
 import { searchInstruments, getListingsFor } from "@/lib/market-data/registry"
 import { hasAnyHistoricalSource } from "@/lib/market-data/router"
 
@@ -25,6 +26,7 @@ export default async function NewReplayPage() {
     return (
       <div className="space-y-6">
         <PageHeader
+          breadcrumbs={breadcrumbTrail("/replay", { label: "New replay" })}
           title="New replay"
           description="A replay records its trades into a backtest session."
         />
@@ -68,6 +70,7 @@ export default async function NewReplayPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        breadcrumbs={breadcrumbTrail("/replay", { label: "New replay" })}
         title="New replay"
         description="Pick a market and a period. Tradar obtains the historical data for you."
       />

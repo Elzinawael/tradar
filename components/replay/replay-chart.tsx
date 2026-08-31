@@ -17,6 +17,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts"
 import type { Candle } from "@/lib/candles"
+import { readChartColors } from "@/lib/charts/theme"
 
 /** A horizontal level to draw on the price scale. */
 export interface ChartLevel {
@@ -75,6 +76,10 @@ export function ReplayChart({
   // The series is typed over `Time`, so the markers plugin is too.
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
 
+  // Chart palette pulled from the design tokens, resolved once. The app is
+  // dark-only, so it does not need to react to a theme change.
+  const colors = useMemo(() => readChartColors(), [])
+
   const data = useMemo(
     () =>
       candles
@@ -93,22 +98,20 @@ export function ReplayChart({
     const container = containerRef.current
     if (!container) return
 
-    const token = (_name: string, fallback: string) => fallback
-
     const chart = createChart(container, {
       height,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: token("--color-muted-foreground", "#8b8b8b"),
+        textColor: colors.mutedForeground,
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: token("--color-border", "#2a2a2a") },
-        horzLines: { color: token("--color-border", "#2a2a2a") },
+        vertLines: { color: colors.border },
+        horzLines: { color: colors.border },
       },
-      rightPriceScale: { borderColor: token("--color-border", "#2a2a2a") },
+      rightPriceScale: { borderColor: colors.border },
       timeScale: {
-        borderColor: token("--color-border", "#2a2a2a"),
+        borderColor: colors.border,
         timeVisible: true,
         secondsVisible: false,
       },
@@ -116,12 +119,12 @@ export function ReplayChart({
     })
 
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: token("--color-positive", "#22c55e"),
-      downColor: token("--color-negative", "#ef4444"),
-      borderUpColor: token("--color-positive", "#22c55e"),
-      borderDownColor: token("--color-negative", "#ef4444"),
-      wickUpColor: token("--color-positive", "#22c55e"),
-      wickDownColor: token("--color-negative", "#ef4444"),
+      upColor: colors.positive,
+      downColor: colors.negative,
+      borderUpColor: colors.positive,
+      borderDownColor: colors.negative,
+      wickUpColor: colors.positive,
+      wickDownColor: colors.negative,
     })
 
     chartRef.current = chart
@@ -143,7 +146,7 @@ export function ReplayChart({
       markersRef.current = null
       priceLinesRef.current = []
     }
-  }, [height])
+  }, [height, colors])
 
   useEffect(() => {
     const series = seriesRef.current
@@ -165,16 +168,16 @@ export function ReplayChart({
     const styleFor = (kind: ChartLevel["kind"]) => {
       switch (kind) {
         case "stop":
-          return { color: "#ef4444", lineStyle: LineStyle.Dashed }
+          return { color: colors.negative, lineStyle: LineStyle.Dashed }
         case "target":
-          return { color: "#22c55e", lineStyle: LineStyle.Dashed }
+          return { color: colors.positive, lineStyle: LineStyle.Dashed }
         case "current":
-          return { color: "#8b8b8b", lineStyle: LineStyle.Dotted }
+          return { color: colors.mutedForeground, lineStyle: LineStyle.Dotted }
         case "pending":
           // Sparse dots distinguish an unfilled order from a live entry.
-          return { color: "#60a5fa", lineStyle: LineStyle.SparseDotted }
+          return { color: colors.info, lineStyle: LineStyle.SparseDotted }
         default:
-          return { color: "#d4a437", lineStyle: LineStyle.Solid }
+          return { color: colors.primary, lineStyle: LineStyle.Solid }
       }
     }
 
@@ -191,7 +194,7 @@ export function ReplayChart({
           title: level.label,
         })
       })
-  }, [levels])
+  }, [levels, colors])
 
   useEffect(() => {
     const plugin = markersRef.current
@@ -209,15 +212,15 @@ export function ReplayChart({
     } => {
       switch (kind) {
         case "entry-long":
-          return { position: "belowBar", shape: "arrowUp", color: "#22c55e" }
+          return { position: "belowBar", shape: "arrowUp", color: colors.positive }
         case "entry-short":
-          return { position: "aboveBar", shape: "arrowDown", color: "#ef4444" }
+          return { position: "aboveBar", shape: "arrowDown", color: colors.negative }
         case "exit-stop":
-          return { position: "aboveBar", shape: "circle", color: "#ef4444" }
+          return { position: "aboveBar", shape: "circle", color: colors.negative }
         case "exit-target":
-          return { position: "aboveBar", shape: "circle", color: "#22c55e" }
+          return { position: "aboveBar", shape: "circle", color: colors.positive }
         default:
-          return { position: "aboveBar", shape: "square", color: "#8b8b8b" }
+          return { position: "aboveBar", shape: "square", color: colors.mutedForeground }
       }
     }
 
@@ -233,7 +236,7 @@ export function ReplayChart({
         })
         .sort((a, b) => (a.time as number) - (b.time as number)),
     )
-  }, [markers])
+  }, [markers, colors])
 
   return (
     <div
