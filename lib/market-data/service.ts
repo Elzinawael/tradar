@@ -16,11 +16,17 @@
  */
 
 import { createClient } from "@/lib/supabase/server"
-import { isTimeframe, type Timeframe } from "@/lib/candles"
+import { isTimeframe, TIMEFRAME_MINUTES, type Timeframe } from "@/lib/candles"
+import { getCandleRangeStats } from "@/lib/data"
 import { getInstrumentBySymbol } from "./registry"
 import { resolveProviders } from "./router"
 import { runFailover } from "./failover"
-import { findMissingRanges, type StoredRange } from "./coverage"
+import {
+  findMissingRanges,
+  missingRangesFromSpans,
+  type MissingRange,
+  type StoredRange,
+} from "./coverage"
 import { isSaneCandle } from "./provider"
 import {
   isFailoverSafe,
@@ -31,8 +37,66 @@ import {
   type HistoricalResult,
   type ProviderAttempt,
   type ProviderErrorCode,
+  type RangeCoverage,
   type UnavailableReason,
 } from "./types"
+
+/** Cheap range stats — a COUNT and the two edge timestamps. */
+type RangeStats = { count: number; firstTs: string | null; lastTs: string | null }
+
+/**
+ * Builds a {@link RangeCoverage} from cheap stats plus the uncovered sub-ranges
+ * the coverage-span model reports. Never scans the full dataset.
+ *
+ * `missing` comes from candle_coverage (interior-hole aware) or, for data that
+ * predates migration 0013, the legacy outer min/max. Head and tail shortfalls
+ * are judged from the actual stored edges so metadata that over-claims cannot
+ * pass a range off as complete.
+ */
+function buildRangeCoverage(
+  stats: RangeStats,
+  missing: MissingRange[],
+  from: Date,
+  to: Date,
+  timeframe: Timeframe,
+): RangeCoverage {
+  const barMs = TIMEFRAME_MINUTES[timeframe] * 60_000
+  const tol = barMs * 2
+
+  const missingHead =
+    stats.count === 0 ||
+    stats.firstTs === null ||
+    new Date(stats.firstTs).getTime() - from.getTime() > tol
+  const missingTail =
+    stats.count === 0 ||
+    stats.lastTs === null ||
+    to.getTime() - new Date(stats.lastTs).getTime() > tol
+
+  const gaps = missing
+    .filter(
+      (r) =>
+        r.from.getTime() > from.getTime() + tol &&
+        r.to.getTime() < to.getTime() - tol,
+    )
+    .map((r) => ({
+      from: r.from.toISOString(),
+      to: r.to.toISOString(),
+      missingBars: Math.max(
+        0,
+        Math.round((r.to.getTime() - r.from.getTime()) / barMs) - 1,
+      ),
+    }))
+
+  return {
+    count: stats.count,
+    firstTs: stats.firstTs,
+    lastTs: stats.lastTs,
+    complete: stats.count > 0 && !missingHead && !missingTail && gaps.length === 0,
+    missingHead,
+    missingTail,
+    gaps,
+  }
+}
 
 /** Stored span for one instrument/timeframe, used to avoid refetching. */
 async function getStoredRange(
@@ -59,26 +123,26 @@ async function getStoredRange(
 }
 
 /**
- * Persists fetched candles under Tradar's own symbol.
+ * Persists fetched candles for one gap.
  *
- * Writes go through import_candles(), the SECURITY DEFINER function that is
- * the only write path into public.candles — so the engine cannot bypass the
- * validation or the admin restriction, and the primary key keeps the write
- * idempotent.
+ * Writes go through ingest_market_data() (migration 0013), the SECURITY
+ * DEFINER path for engine-fetched data: authenticated, symbol-must-be-a-real-
+ * instrument, per-user rate limited, audited. It also records the requested
+ * `gap` in candle_coverage. The primary key keeps the write idempotent.
+ *
+ * Errors are RETURNED, never swallowed — a persist failure must reach the
+ * caller as a concrete message rather than collapsing into "no data".
  */
-async function persistCandles(
+async function persistGap(
   symbol: string,
   timeframe: string,
   candles: Candle[],
-): Promise<number> {
-  if (candles.length === 0) return 0
-
+  gap: MissingRange,
+): Promise<{ written: number; error: string | null }> {
   const supabase = await createClient()
-  if (!supabase) return 0
+  if (!supabase) return { written: 0, error: "storage unavailable" }
 
   const rows = candles.filter(isSaneCandle).map((c) => ({
-    symbol,
-    timeframe,
     ts: c.ts,
     open: c.open,
     high: c.high,
@@ -88,17 +152,51 @@ async function persistCandles(
   }))
 
   let written = 0
-  for (let i = 0; i < rows.length; i += 1000) {
-    const batch = rows.slice(i, i + 1000)
-    const { error } = await supabase.rpc("import_candles", { payload: batch })
-    if (error) break
-    written += batch.length
+  // First call carries the coverage range; later batches only add bars.
+  for (let i = 0; i < rows.length || i === 0; i += 5000) {
+    const batch = rows.slice(i, i + 5000)
+    const { data, error } = await supabase.rpc("ingest_market_data", {
+      p_symbol: symbol,
+      p_timeframe: timeframe,
+      p_candles: batch,
+      p_range_start: i === 0 ? gap.from.toISOString() : null,
+      p_range_end: i === 0 ? gap.to.toISOString() : null,
+    })
+    if (error) return { written, error: error.message }
+    written += Number((data as { ingested?: number } | null)?.ingested ?? 0)
+    if (batch.length < 5000) break
   }
 
-  return written
+  return { written, error: null }
 }
 
-/** Reads stored candles for a range. */
+/** Reads the recorded coverage spans for one instrument/timeframe. */
+async function readCoverageSpans(
+  symbol: string,
+  timeframe: string,
+): Promise<{ range_start: string; range_end: string }[]> {
+  const supabase = await createClient()
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from("candle_coverage")
+    .select("range_start, range_end")
+    .eq("symbol", symbol)
+    .eq("timeframe", timeframe)
+  if (error || !data) return []
+  return data as { range_start: string; range_end: string }[]
+}
+
+
+/**
+ * Reads a capped, most-recent sample of stored candles for a range.
+ *
+ * The `candles` on a HistoricalResult are for precision inference and a small
+ * preview only — callers that need the full series load it windowed through
+ * `getCandles`. Ordering DESC + limit keeps this cheap no matter how wide the
+ * range is (a 90-day M1 window is ~130k bars); the slice is re-sorted ASC.
+ */
+const SAMPLE_BARS = 2000
+
 async function readStored(
   symbol: string,
   timeframe: string,
@@ -115,19 +213,21 @@ async function readStored(
     .eq("timeframe", timeframe)
     .gte("ts", from.toISOString())
     .lte("ts", to.toISOString())
-    .order("ts", { ascending: true })
-    .limit(20000)
+    .order("ts", { ascending: false })
+    .limit(SAMPLE_BARS)
 
   if (error || !data) return []
 
-  return (data as Record<string, unknown>[]).map((row) => ({
-    ts: String(row.ts),
-    open: Number(row.open),
-    high: Number(row.high),
-    low: Number(row.low),
-    close: Number(row.close),
-    volume: row.volume === null ? null : Number(row.volume),
-  }))
+  return (data as Record<string, unknown>[])
+    .map((row) => ({
+      ts: String(row.ts),
+      open: Number(row.open),
+      high: Number(row.high),
+      low: Number(row.low),
+      close: Number(row.close),
+      volume: row.volume === null ? null : Number(row.volume),
+    }))
+    .reverse()
 }
 
 function unavailable(reason: UnavailableReason): HistoricalResult {
@@ -167,14 +267,44 @@ export async function getHistoricalData(params: {
   if (!instrument) return unavailable("no_provider")
   if (!instrument.active) return unavailable("instrument_inactive")
 
-  const stored = await getStoredRange(symbol, timeframe)
-  const missing = findMissingRanges(stored, from, to)
+  // ── Which sub-ranges still need fetching ────────────────────────────────
+  // Prefer explicit coverage spans (candle_coverage, migration 0013), which
+  // see interior holes. Fall back to the legacy outer min/max for data that
+  // predates 0013. Never scan the full range — a wide M1 request is hundreds
+  // of thousands of bars.
+  const readMissing = async (): Promise<MissingRange[]> => {
+    const spans = await readCoverageSpans(symbol, timeframe)
+    return spans.length > 0
+      ? missingRangesFromSpans(spans, from, to)
+      : findMissingRanges(await getStoredRange(symbol, timeframe), from, to)
+  }
 
-  // Everything is already cached — the common case once one customer has
-  // pulled a range, and the reason a second customer costs nothing.
+  let missing = await readMissing()
+  let stats = await getCandleRangeStats({
+    symbol,
+    timeframe,
+    from: params.from,
+    to: params.to,
+  })
+
+  // ── Fast path: spans say covered ───────────────────────────────────────
+  // But never trust metadata alone — check the actual bars via cheap stats.
+  // If the stored edges disagree, treat the shortfall as missing.
   if (missing.length === 0) {
-    const candles = await readStored(symbol, timeframe, from, to)
-    return { ok: true, candles, provider: "cache" }
+    const cov = buildRangeCoverage(stats, [], from, to, timeframe as Timeframe)
+    if (cov.complete) {
+      const candles = await readStored(symbol, timeframe, from, to)
+      return { ok: true, candles, provider: "cache", coverage: cov, partial: false }
+    }
+    missing = [
+      ...(cov.missingHead
+        ? [{ from, to: stats.firstTs ? new Date(stats.firstTs) : to }]
+        : []),
+      ...(cov.missingTail && stats.lastTs
+        ? [{ from: new Date(stats.lastTs), to }]
+        : []),
+    ].filter((r) => r.to.getTime() > r.from.getTime())
+    if (missing.length === 0) missing = [{ from, to }]
   }
 
   const resolution = resolveProviders(
@@ -184,21 +314,24 @@ export async function getHistoricalData(params: {
   )
 
   if (resolution.eligible.length === 0) {
-    // No source for the gaps. If something is stored, serve that rather than
-    // failing outright — partial history is more useful than none.
-    if (stored.candleCount > 0) {
+    // No source for the gaps. Serve whatever is stored rather than failing
+    // outright — partial history beats none — but report it as partial.
+    if (stats.count > 0) {
       const candles = await readStored(symbol, timeframe, from, to)
-      if (candles.length > 0) {
-        return { ok: true, candles, provider: "cache" }
-      }
+      const cov = buildRangeCoverage(
+        stats,
+        await readMissing(),
+        from,
+        to,
+        timeframe as Timeframe,
+      )
+      return { ok: true, candles, provider: "cache", coverage: cov, partial: !cov.complete }
     }
     return unavailable(resolution.reason ?? "no_provider")
   }
 
   // ── Failover ────────────────────────────────────────────────────────────
-  // The decision sequence lives in runFailover() so it can be tested against
-  // mocked providers; this supplies the I/O. Bounded by the eligible list, so
-  // it cannot spin.
+  let persistError: string | null = null
   const outcome = await runFailover({
     eligible: resolution.eligible,
     missing,
@@ -210,27 +343,57 @@ export async function getHistoricalData(params: {
         from: gap.from,
         to: gap.to,
       }),
-    onCandles: async (fetched) => {
-      await persistCandles(symbol, timeframe, fetched)
+    onCandles: async (fetched, gap) => {
+      const result = await persistGap(symbol, timeframe, fetched, gap)
+      if (result.error) persistError = result.error
     },
   })
 
-  const attempts = outcome.attempts
-  const fallbackUsed = outcome.fallbackUsed
-  const candlesReceived = outcome.candlesReceived
-  const lastCode = outcome.lastCode
+  const { attempts, fallbackUsed, candlesReceived, lastCode } = outcome
   const usedProvider = outcome.provider
 
-  // ── Coverage verification ───────────────────────────────────────────────
-  // Returning rows is not the same as satisfying the request. Recompute
-  // coverage from what is actually stored, so a provider that answered with
-  // three of the seven requested days is reported as partial rather than
-  // silently accepted as complete.
-  const afterStored = await getStoredRange(symbol, timeframe)
-  const stillMissing = findMissingRanges(afterStored, from, to)
+  // ── Coverage verification from the actual stored bars ──────────────────
+  // Cheap stats + the (RPC-recorded) coverage spans, never a full scan. The
+  // ingest RPC writes a coverage span for every gap it is asked to fill, so
+  // a partial provider response is retried next time rather than trusted.
+  stats = await getCandleRangeStats({
+    symbol,
+    timeframe,
+    from: params.from,
+    to: params.to,
+  })
+  const cov = buildRangeCoverage(
+    stats,
+    await readMissing(),
+    from,
+    to,
+    timeframe as Timeframe,
+  )
   const candles = await readStored(symbol, timeframe, from, to)
 
-  if (candles.length === 0) {
+  const diagnostics = {
+    attempts,
+    fallbackUsed,
+    candlesReceived,
+    candlesStored: stats.count,
+    cacheHit: false,
+    missingRanges:
+      cov.gaps.length + (cov.missingHead ? 1 : 0) + (cov.missingTail ? 1 : 0),
+    skippedByCircuitBreaker: resolution.skippedByCircuitBreaker,
+  }
+
+  if (stats.count === 0) {
+    // A provider answered but nothing landed in storage. With the 0013
+    // ingestion path this should not be an authorization problem any more, but
+    // surface whatever the RPC said rather than a generic "unavailable".
+    if (persistError !== null && candlesReceived > 0) {
+      return {
+        ok: false,
+        reason: "provider_error",
+        message: `Market data was retrieved but could not be saved: ${persistError}`,
+        diagnostics,
+      }
+    }
     return {
       ok: false,
       reason: lastCode ?? "provider_error",
@@ -238,15 +401,7 @@ export async function getHistoricalData(params: {
         lastCode !== null
           ? PROVIDER_ERROR_MESSAGES[lastCode]
           : "Historical data could not be retrieved right now. Please try again shortly.",
-      diagnostics: {
-        attempts,
-        fallbackUsed,
-        candlesReceived,
-        candlesStored: 0,
-        cacheHit: false,
-        missingRanges: stillMissing.length,
-        skippedByCircuitBreaker: resolution.skippedByCircuitBreaker,
-      },
+      diagnostics,
     }
   }
 
@@ -254,19 +409,9 @@ export async function getHistoricalData(params: {
     ok: true,
     candles,
     provider: usedProvider ?? "cache",
-    // Partial coverage is reported, never hidden. A weekend inside the range
-    // legitimately produces no bars, so this is a signal for diagnostics
-    // rather than an error on its own.
-    partial: stillMissing.length > 0,
-    diagnostics: {
-      attempts,
-      fallbackUsed,
-      candlesReceived,
-      candlesStored: candles.length,
-      cacheHit: false,
-      missingRanges: stillMissing.length,
-      skippedByCircuitBreaker: resolution.skippedByCircuitBreaker,
-    },
+    coverage: cov,
+    partial: !cov.complete,
+    diagnostics,
   }
 }
 

@@ -123,7 +123,9 @@ export async function ensureReplayData(
     }
   }
 
-  if (result.candles.length === 0) {
+  const bars = result.coverage.count
+
+  if (bars === 0) {
     return {
       status: "unavailable",
       message:
@@ -133,10 +135,30 @@ export async function ensureReplayData(
     }
   }
 
+  const count = bars.toLocaleString()
+
+  if (result.partial || !result.coverage.complete) {
+    return {
+      // "unavailable" + a non-zero count is how the form shows a partial-cover
+      // warning: the data is there but the window has gaps.
+      status: "unavailable",
+      message:
+        `${count} candles loaded, but the period is not fully covered — ` +
+        `some sub-ranges returned no data. Try a narrower period, or a period ` +
+        `the provider covers.`,
+      candleCount: bars,
+      providerDetail: isAdmin
+        ? `provider: ${result.provider}; missing ranges: ${
+            result.diagnostics?.missingRanges ?? result.coverage.gaps.length
+          }`
+        : null,
+    }
+  }
+
   return {
     status: "ready",
-    message: `${result.candles.length.toLocaleString()} candles ready.`,
-    candleCount: result.candles.length,
+    message: `${count} candles ready — the period is fully covered.`,
+    candleCount: bars,
     providerDetail: isAdmin ? `provider: ${result.provider}` : null,
   }
 }

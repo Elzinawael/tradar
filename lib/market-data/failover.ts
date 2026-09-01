@@ -11,11 +11,11 @@
  * practice means it is not exercised at all.
  */
 
-import { isFailoverSafe, type ProviderAttempt, type ProviderErrorCode } from "./types"
-import { ProviderError } from "./types"
-import { recordFailure, recordSuccess } from "./health"
+import { isFailoverSafe, type ProviderAttempt, type ProviderErrorCode } from "./types.ts"
+import { ProviderError } from "./types.ts"
+import { recordFailure, recordSuccess } from "./health.ts"
 import type { EligibleProvider } from "./router"
-import type { Candle } from "./types"
+import type { Candle } from "./types.ts"
 
 export interface FailoverRange {
   from: Date
@@ -54,7 +54,8 @@ export async function runFailover(params: {
     candidate: EligibleProvider,
     range: FailoverRange,
   ) => Promise<Candle[]>
-  onCandles: (candles: Candle[]) => Promise<void>
+  /** Called per successfully fetched gap, with the gap it covers. */
+  onCandles: (candles: Candle[], gap: FailoverRange) => Promise<void>
 }): Promise<FailoverOutcome> {
   const { eligible, missing, fetchCandles, onCandles } = params
 
@@ -82,7 +83,7 @@ export async function runFailover(params: {
         }
 
         received += fetched.length
-        await onCandles(fetched)
+        await onCandles(fetched, gap)
       } catch (error) {
         const code: ProviderErrorCode =
           error instanceof ProviderError ? error.code : "provider_unavailable"

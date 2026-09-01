@@ -6,7 +6,7 @@
  * CSV file, a paid vendor or the local database.
  */
 
-import type { Candle, Timeframe } from "@/lib/candles"
+import type { Candle, Timeframe } from "../candles.ts"
 
 export type { Candle, Timeframe }
 
@@ -210,13 +210,13 @@ export const PROVIDER_ERROR_MESSAGES: Record<ProviderErrorCode, string> = {
  * message without inspecting vendor-specific error shapes.
  */
 export class ProviderError extends Error {
-  constructor(
-    readonly code: ProviderErrorCode,
-    /** Operator-facing detail. Logged, never shown to a customer. */
-    message: string,
-  ) {
+  readonly code: ProviderErrorCode
+
+  /** `message` is operator-facing detail — logged, never shown to a customer. */
+  constructor(code: ProviderErrorCode, message: string) {
     super(message)
     this.name = "ProviderError"
+    this.code = code
   }
 }
 
@@ -252,11 +252,41 @@ export interface FetchDiagnostics {
   skippedByCircuitBreaker: string[]
 }
 
+/**
+ * Range coverage after an ensure cycle.
+ *
+ * Built from cheap stats (a COUNT and the two edge timestamps) plus the
+ * recorded coverage spans — never by scanning the whole dataset, which for a
+ * wide M1 range is hundreds of thousands of bars.
+ */
+export interface RangeCoverage {
+  /** Total bars stored for the requested range. */
+  count: number
+  firstTs: string | null
+  lastTs: string | null
+  /**
+   * The recorded coverage spans contain the whole requested range, and the
+   * stored data reaches within a bar of both edges.
+   */
+  complete: boolean
+  /** The start of the requested range has no stored data near it. */
+  missingHead: boolean
+  /** The end of the requested range has no stored data near it. */
+  missingTail: boolean
+  /** Sub-ranges of the request not covered by any recorded span. */
+  gaps: { from: string; to: string; missingBars: number }[]
+}
+
 export type HistoricalResult =
   | {
       ok: true
+      /**
+       * A recent sample of the range (capped) for preview / precision
+       * inference. NOT the whole dataset — use `coverage.count` for the count.
+       */
       candles: Candle[]
       provider: string
+      coverage: RangeCoverage
       /** True when the requested range is not fully covered by stored data. */
       partial?: boolean
       diagnostics?: FetchDiagnostics

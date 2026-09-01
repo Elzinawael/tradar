@@ -13,6 +13,7 @@ import { Card } from "@/components/ui/card"
 import {
   getBacktestSessionById,
   getCandles,
+  getCandleRangeStats,
   getOpenReplayPosition,
   getPendingReplayOrder,
   getReplayOrders,
@@ -22,6 +23,12 @@ import {
   getSimulatedTrades,
 } from "@/lib/data"
 import { breadcrumbTrail } from "@/lib/navigation"
+import { isTimeframe } from "@/lib/candles"
+import { assessCoverage, coverageFromStats } from "@/lib/replay/dataset"
+import {
+  replayWindowStart,
+  REPLAY_WINDOW_MAX_BARS,
+} from "@/lib/replay/window"
 import { getInstrumentBySymbol } from "@/lib/market-data/registry"
 import { resolvePricePrecision } from "@/lib/smart-input/instrument-config"
 import { deleteReplaySession } from "@/lib/actions/replay"
@@ -42,16 +49,34 @@ export default async function ReplayDetailPage({
   const session = await getBacktestSessionById(replay.sessionId)
   if (!session) notFound()
 
-  const [candles, trades, openPosition, strategies, pendingOrder, orders, instrument] =
+  const timeframe = isTimeframe(replay.timeframe) ? replay.timeframe : "H1"
+
+  // WINDOWED LOAD. Only bars from a bounded lookback up to the cursor reach the
+  // client — a 90-day M1 replay is ~130k bars and must not be sent whole. The
+  // player extends this window forward as the replay advances (advanceReplay
+  // returns the revealed bars). No bar after the cursor is ever loaded.
+  const windowStart = replayWindowStart(
+    replay.cursorTs,
+    replay.rangeStart,
+    timeframe,
+  )
+
+  const [candles, rangeStats, trades, openPosition, strategies, pendingOrder, orders, instrument] =
     await Promise.all([
-    // Bounded to the replay's own window: candles outside the selected range
-    // are never fetched, so they cannot reach the client at all.
     getCandles({
+      symbol: replay.symbol,
+      timeframe: replay.timeframe,
+      from: windowStart,
+      until: replay.cursorTs,
+      limit: REPLAY_WINDOW_MAX_BARS,
+    }),
+    // Cheap: count + first/last bar for the WHOLE range, to check the dataset
+    // against the fingerprint stored at creation without loading it all.
+    getCandleRangeStats({
       symbol: replay.symbol,
       timeframe: replay.timeframe,
       from: replay.rangeStart,
       to: replay.rangeEnd,
-      limit: 20000,
     }),
     getSimulatedTrades(session.id),
     getOpenReplayPosition(replay.id),
@@ -67,6 +92,35 @@ export default async function ReplayDetailPage({
     instrument?.pricePrecision,
     candles.slice(-200).map((c) => c.close),
   )
+
+  // Coverage of the WHOLE replay range. New replays are verified complete at
+  // creation and carry a bar-count fingerprint; for those, cheap range stats
+  // are enough. Legacy replays (no fingerprint) get the full candle-level
+  // check so interior holes are still caught.
+  let coverage: ReturnType<typeof assessCoverage> | null = null
+  if (isTimeframe(replay.timeframe)) {
+    if (replay.datasetBars !== null) {
+      coverage = coverageFromStats(
+        rangeStats,
+        { start: replay.rangeStart, end: replay.rangeEnd },
+        replay.timeframe,
+        replay.datasetBars,
+      )
+    } else {
+      const allBars = await getCandles({
+        symbol: replay.symbol,
+        timeframe: replay.timeframe,
+        from: replay.rangeStart,
+        to: replay.rangeEnd,
+        limit: 20000,
+      })
+      coverage = assessCoverage(
+        allBars,
+        { start: replay.rangeStart, end: replay.rangeEnd },
+        replay.timeframe,
+      )
+    }
+  }
 
   const { summary } = await getSessionPerformance(session, trades)
 
@@ -164,6 +218,7 @@ export default async function ReplayDetailPage({
           replayTrades={replayTrades}
           pendingOrder={pendingOrder}
           pricePrecision={pricePrecision}
+          coverage={coverage}
         />
       )}
 

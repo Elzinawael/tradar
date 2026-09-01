@@ -787,6 +787,42 @@ function mapCandle(row: Row): Candle {
 }
 
 /**
+ * Cheap range stats for a symbol/timeframe — count and first/last bar — without
+ * loading the bars. Used by the replay page to check the dataset against the
+ * fingerprint stored when the replay was created, so a windowed load is enough.
+ */
+export async function getCandleRangeStats(params: {
+  symbol: string
+  timeframe: string
+  from: string
+  to: string
+}): Promise<{ count: number; firstTs: string | null; lastTs: string | null }> {
+  const supabase = await createClient()
+  if (!supabase) return { count: 0, firstTs: null, lastTs: null }
+
+  const base = () =>
+    supabase
+      .from("candles")
+      .select("ts", { count: "exact" })
+      .eq("symbol", params.symbol)
+      .eq("timeframe", params.timeframe)
+      .gte("ts", params.from)
+      .lte("ts", params.to)
+
+  const [{ count }, first, last] = await Promise.all([
+    base().limit(1),
+    base().order("ts", { ascending: true }).limit(1).maybeSingle(),
+    base().order("ts", { ascending: false }).limit(1).maybeSingle(),
+  ])
+
+  return {
+    count: count ?? 0,
+    firstTs: first.data ? String((first.data as Row).ts) : null,
+    lastTs: last.data ? String((last.data as Row).ts) : null,
+  }
+}
+
+/**
  * Candles for a symbol/timeframe within a range.
  *
  * `until` is the replay cursor. When supplied, no candle after it is returned,
@@ -854,11 +890,17 @@ function mapReplaySession(row: Row): ReplaySession {
     rangeEnd: str(row.range_end),
     cursorTs: str(row.cursor_ts),
     speed: num(row.speed, 1),
+    datasetBars:
+      row.dataset_bars === null || row.dataset_bars === undefined
+        ? null
+        : Number(row.dataset_bars),
+    datasetFirstTs: strOrNull(row.dataset_first_ts),
+    datasetLastTs: strOrNull(row.dataset_last_ts),
   }
 }
 
 const REPLAY_COLUMNS =
-  "id, session_id, symbol, timeframe, range_start, range_end, cursor_ts, speed, created_at"
+  "id, session_id, symbol, timeframe, range_start, range_end, cursor_ts, speed, created_at, dataset_bars, dataset_first_ts, dataset_last_ts"
 
 /** Replay sessions belonging to the current user, newest first. */
 export async function getReplaySessions(): Promise<ReplaySession[]> {

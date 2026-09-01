@@ -180,6 +180,10 @@ export interface ReplaySession {
   /** Furthest revealed bar. Never past rangeEnd. */
   cursorTs: string
   speed: number
+  /** Coverage fingerprint captured at creation (migration 0013). */
+  datasetBars: number | null
+  datasetFirstTs: string | null
+  datasetLastTs: string | null
 }
 
 /** A resting replay order awaiting historical conditions. */

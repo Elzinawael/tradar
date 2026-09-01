@@ -196,6 +196,15 @@ export async function importCandlesCsv(
   const { inserted, error } = await upsertCandles(parsed)
   if (error) return { error, message: null, imported: inserted }
 
+  // Record the imported span so the market-data engine does not later re-fetch
+  // a range an administrator has already loaded from a file.
+  const tsSorted = parsed
+    .map((c) => c.ts)
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+  if (tsSorted.length > 0) {
+    await recordCoverage(symbol, timeframe, tsSorted[0], tsSorted[tsSorted.length - 1], inserted, "csv")
+  }
+
   revalidatePath("/replay")
   return {
     error: null,
@@ -320,10 +329,40 @@ export async function importCandlesFromBinance(
   const { inserted, error } = await upsertCandles(collected)
   if (error) return { error, message: null, imported: inserted }
 
+  await recordCoverage(
+    symbol,
+    timeframe,
+    start.toISOString(),
+    end.toISOString(),
+    inserted,
+    "binance",
+  )
+
   revalidatePath("/replay")
   return {
     error: null,
     message: `Imported ${inserted} candles for ${symbol} ${timeframe} from Binance.`,
     imported: inserted,
   }
+}
+
+/** Records an imported span in candle_coverage (best-effort). */
+async function recordCoverage(
+  symbol: string,
+  timeframe: string,
+  rangeStart: string,
+  rangeEnd: string,
+  barCount: number,
+  source: string,
+): Promise<void> {
+  const supabase = await createClient()
+  if (!supabase) return
+  await supabase.rpc("record_candle_coverage", {
+    p_symbol: symbol,
+    p_timeframe: timeframe,
+    p_range_start: rangeStart,
+    p_range_end: rangeEnd,
+    p_bar_count: barCount,
+    p_source: source,
+  })
 }

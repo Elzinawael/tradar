@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isTimeframe } from "@/lib/candles"
+import { ensureHistoricalData } from "@/lib/market-data/service"
 import {
   computeDurationMinutes,
   computePositionSize,
@@ -84,6 +85,62 @@ export async function createReplaySession(
     return { error: "Please correct the highlighted fields.", fieldErrors: errors }
   }
 
+  // ── Verify (and, where possible, fill) the dataset BEFORE creating the
+  //    session. A replay that "starts" and then silently stops at the last
+  //    stored bar is the exact failure this guards against.
+  const ensured = await ensureHistoricalData({
+    symbol,
+    timeframe,
+    from: start.toISOString(),
+    to: end.toISOString(),
+  })
+
+  if (!ensured.ok) {
+    return { error: ensured.message, fieldErrors: {} }
+  }
+
+  // Coverage is derived server-side from cheap stats + the recorded coverage
+  // spans — never a full candle scan, which for a wide M1 range is hundreds of
+  // thousands of bars.
+  const coverage = ensured.coverage
+
+  if (coverage.count === 0) {
+    return {
+      error:
+        `No candles are available for ${symbol} ${timeframe} in that period. ` +
+        `Try a different range, or load the data from Market data first.`,
+      fieldErrors: {},
+    }
+  }
+
+  // Refuse a replay only when the shortfall would make it unusable: the start
+  // or end of the range has no data, or an interior gap is large. Small gaps
+  // (a market holiday) are allowed — the replay player shows a coverage banner
+  // and steps over them, which is honest.
+  const largestGap = coverage.gaps.reduce((m, g) => Math.max(m, g.missingBars), 0)
+  const bigGapThreshold = Math.max(300, Math.round(coverage.count * 0.15))
+
+  if (coverage.missingHead || coverage.missingTail || largestGap > bigGapThreshold) {
+    const parts: string[] = []
+    if (coverage.missingHead) parts.push("the start of the range has no data")
+    if (coverage.missingTail) parts.push("the end of the range has no data")
+    if (largestGap > bigGapThreshold) {
+      const g = coverage.gaps.find((x) => x.missingBars === largestGap)
+      parts.push(
+        `a ${largestGap.toLocaleString()}-bar gap${
+          g ? ` near ${g.from.slice(0, 10)}` : ""
+        }`,
+      )
+    }
+    return {
+      error:
+        `That period cannot be replayed reliably: ${parts.join("; ")}. ` +
+        `${coverage.count.toLocaleString()} bars are available. ` +
+        `Narrow the range, or load the missing data from Market data and try again.`,
+      fieldErrors: {},
+    }
+  }
+
   // The cursor starts at the beginning of the range: nothing is revealed yet.
   const { data, error } = await supabase
     .from("replay_sessions")
@@ -96,6 +153,11 @@ export async function createReplaySession(
       range_end: end.toISOString(),
       cursor_ts: start.toISOString(),
       speed: 1,
+      // Dataset fingerprint — the replay page compares this to live coverage
+      // and flags if the underlying candles changed since (a re-import).
+      dataset_bars: coverage.count,
+      dataset_first_ts: coverage.firstTs,
+      dataset_last_ts: coverage.lastTs,
     })
     .select("id")
     .single()
@@ -449,12 +511,25 @@ async function sessionRisk(
  * level touched closes the position, so a later bar cannot undo an earlier
  * exit.
  */
-export async function advanceReplay(
-  replayId: string,
-  bars: number,
-): Promise<{
+/** One revealed bar, as returned to the client. */
+export interface RevealedBar {
+  ts: string
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+export interface AdvanceReplayResult {
   cursorTs: string | null
   atEnd: boolean
+  /**
+   * The replay ran out of STORED bars before reaching range_end — i.e. the
+   * dataset is incomplete. Distinct from a clean end-of-range.
+   */
+  dataIncomplete: boolean
+  /** Bars revealed by this advance, so the client can extend its window. */
+  revealed: RevealedBar[]
   closed: {
     reason: "stop" | "target"
     exitPrice: number
@@ -463,30 +538,31 @@ export async function advanceReplay(
   } | null
   filled: { fillPrice: number; gapped: boolean } | null
   error: string | null
-}> {
-  const supabase = await createClient()
-  if (!supabase) {
-    return {
-      cursorTs: null,
-      atEnd: true,
-      closed: null,
-      filled: null,
-      error: "Supabase is not configured.",
-    }
+}
+
+function advanceFailure(error: string): AdvanceReplayResult {
+  return {
+    cursorTs: null,
+    atEnd: true,
+    dataIncomplete: false,
+    revealed: [],
+    closed: null,
+    filled: null,
+    error,
   }
+}
+
+export async function advanceReplay(
+  replayId: string,
+  bars: number,
+): Promise<AdvanceReplayResult> {
+  const supabase = await createClient()
+  if (!supabase) return advanceFailure("Supabase is not configured.")
 
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) {
-    return {
-      cursorTs: null,
-      atEnd: true,
-      closed: null,
-      filled: null,
-      error: "You must be signed in.",
-    }
-  }
+  if (!user) return advanceFailure("You must be signed in.")
 
   const { data: replay } = await supabase
     .from("replay_sessions")
@@ -494,15 +570,7 @@ export async function advanceReplay(
     .eq("id", replayId)
     .maybeSingle()
 
-  if (!replay) {
-    return {
-      cursorTs: null,
-      atEnd: true,
-      closed: null,
-      filled: null,
-      error: "Replay not found.",
-    }
-  }
+  if (!replay) return advanceFailure("Replay not found.")
 
   const step = Math.min(500, Math.max(1, Math.floor(bars)))
 
@@ -527,9 +595,17 @@ export async function advanceReplay(
   }))
 
   if (revealed.length === 0) {
+    // No more stored bars. If the cursor has not reached range_end, the
+    // dataset is short — say so instead of pretending the replay finished.
+    const cursorMs = new Date(replay.cursor_ts as string).getTime()
+    const endMs = new Date(replay.range_end as string).getTime()
+    const dataIncomplete =
+      Number.isFinite(cursorMs) && Number.isFinite(endMs) && cursorMs < endMs - 60_000
     return {
       cursorTs: String(replay.cursor_ts),
       atEnd: true,
+      dataIncomplete,
+      revealed: [],
       closed: null,
       filled: null,
       error: null,
@@ -643,6 +719,14 @@ export async function advanceReplay(
   return {
     cursorTs: newCursor,
     atEnd: revealed.length < step,
+    dataIncomplete: false,
+    revealed: revealed.map((b) => ({
+      ts: b.ts,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    })),
     closed,
     filled: fillResult
       ? { fillPrice: fillResult.fillPrice, gapped: fillResult.gapped }

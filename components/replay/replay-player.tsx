@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   AlertCircle,
@@ -36,7 +37,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { visibleCandles, type Candle } from "@/lib/candles"
+import { isTimeframe, type Candle, type Timeframe } from "@/lib/candles"
+import type { CoverageReport } from "@/lib/replay/dataset"
+import {
+  createReplayDataSource,
+  type ReplayDataSource,
+} from "@/lib/market-data/sources"
+import { mergeWindow } from "@/lib/replay/window"
 import { computePositionSize } from "@/lib/trade-math"
 import {
   computeUnrealized,
@@ -94,6 +101,12 @@ interface ReplayPlayerProps {
    * no calculation depends on it.
    */
   pricePrecision?: number
+  /**
+   * Whether the loaded candle data actually covers the replay window. When it
+   * has holes the replay skips time; the player says so rather than ending
+   * silently at the last available bar.
+   */
+  coverage?: CoverageReport | null
 }
 
 export function ReplayPlayer({
@@ -106,6 +119,7 @@ export function ReplayPlayer({
   replayTrades,
   pendingOrder,
   pricePrecision = 2,
+  coverage = null,
 }: ReplayPlayerProps) {
   const router = useRouter()
   const [cursorTs, setCursorTs] = useState(replay.cursorTs)
@@ -115,11 +129,32 @@ export function ReplayPlayer({
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [atEnd, setAtEnd] = useState(false)
+  // Bars revealed by advances since the page loaded its window — the client
+  // extends the window forward rather than holding the whole range.
+  const [revealedBars, setRevealedBars] = useState<Candle[]>([])
 
-  const visible = useMemo(
-    () => visibleCandles(candles, cursorTs),
-    [candles, cursorTs],
+  const tf = (isTimeframe(replay.timeframe) ? replay.timeframe : "H1") as Timeframe
+
+  // ONE authoritative view of the replay's candles: the loaded window plus
+  // everything revealed since, sorted, de-duplicated and capped.
+  const allBars = useMemo(
+    () => mergeWindow<Candle>(candles, revealedBars),
+    [candles, revealedBars],
   )
+
+  const source: ReplayDataSource = useMemo(
+    () =>
+      createReplayDataSource({
+        symbol: replay.symbol,
+        timeframe: tf,
+        pricePrecision,
+        range: { start: replay.rangeStart, end: replay.rangeEnd },
+        candles: allBars,
+      }),
+    [allBars, replay.symbol, replay.rangeStart, replay.rangeEnd, tf, pricePrecision],
+  )
+
+  const visible = useMemo(() => source.barsUpTo(cursorTs), [source, cursorTs])
   const current = visible[visible.length - 1] ?? null
 
   // The price at the server-authoritative cursor. Declared early so the order
@@ -147,9 +182,27 @@ export function ReplayPlayer({
           setPlaying(false)
           return
         }
+        // Extend the client window with the bars the server just revealed.
+        if (result.revealed.length > 0) {
+          const asCandles: Candle[] = result.revealed.map((b) => ({
+            ts: b.ts,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            volume: null,
+          }))
+          setRevealedBars((prev) => mergeWindow<Candle>(prev, asCandles))
+        }
         if (result.cursorTs) setCursorTs(result.cursorTs)
         setAtEnd(result.atEnd)
         if (result.atEnd) setPlaying(false)
+        if (result.dataIncomplete) {
+          setPlaying(false)
+          setNotice(
+            "The replay stopped: there are no stored candles beyond this point, but the selected range has not ended. The dataset is incomplete — load the rest from Market data and reset.",
+          )
+        }
 
         if (result.filled) {
           setNotice(
@@ -516,6 +569,46 @@ export function ReplayPlayer({
 
   return (
     <div className="space-y-4">
+      {coverage && !coverage.complete && (
+        <div
+          role="status"
+          className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-warning"
+        >
+          <AlertCircle className="mt-0.5 size-4 shrink-0" />
+          <div className="space-y-0.5 text-foreground">
+            <p className="font-medium text-warning">
+              This replay&apos;s market data is incomplete.
+            </p>
+            <p className="text-muted-foreground">
+              {coverage.actualBars.toLocaleString()} bars loaded
+              {coverage.gaps.length > 0 &&
+                ` · ${coverage.gaps.length} interior gap${
+                  coverage.gaps.length === 1 ? "" : "s"
+                } (largest ${Math.max(
+                  ...coverage.gaps.map((g) => g.missingBars),
+                ).toLocaleString()} bars near ${new Date(
+                  coverage.gaps[0].afterTs,
+                ).toLocaleDateString()})`}
+              {coverage.missingTail && " · data ends before the range end"}
+              {coverage.missingHead && " · data starts after the range start"}
+              {!coverage.missingHead &&
+                !coverage.missingTail &&
+                coverage.gaps.length === 0 &&
+                replay.datasetBars !== null &&
+                ` · the underlying candle data changed since this replay was created (was ${replay.datasetBars.toLocaleString()} bars)`}
+              . The replay steps over missing periods. Load the full range from{" "}
+              <Link
+                href="/replay/data"
+                className="text-primary underline-offset-2 hover:underline"
+              >
+                Market data
+              </Link>
+              , then Reset.
+            </p>
+          </div>
+        </div>
+      )}
+
       <Card className="p-0">
         <CardContent className="p-0">
           <ReplayChart
@@ -555,6 +648,7 @@ export function ReplayPlayer({
               fd.set("id", replay.id)
               await resetReplay(fd)
               setCursorTs(replay.rangeStart)
+              setRevealedBars([])
               setPlaying(false)
               setAtEnd(false)
               setNotice(null)

@@ -26,8 +26,8 @@
  * No credentials are stored here, and nothing here is exposed to the browser.
  */
 
-import type { ProviderErrorCode } from "./types"
-import { isProviderFault } from "./types"
+import type { ProviderErrorCode } from "./types.ts"
+import { isProviderFault } from "./types.ts"
 
 /** Consecutive provider faults before the breaker opens. */
 export const FAILURE_THRESHOLD = 3

@@ -8,8 +8,9 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"lib/**/*.test.mjs\"",
-    "db:test": "bash supabase/tests/run.sh"
+    "test": "node --test \"lib/**/*.test.mjs\" \"supabase/tests/**/*.test.mjs\"",
+    "db:test": "bash supabase/tests/run.sh",
+    "db:test:local": "node --test \"supabase/tests/**/*.test.mjs\""
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.6",
@@ -45,6 +46,7 @@
   "devDependencies": {
     "@babel/core": "^8.0.1",
     "@babel/eslint-parser": "^8.0.1",
+    "@electric-sql/pglite": "^0.5.8",
     "@eslint/js": "^9.39.5",
     "@next/eslint-plugin-next": "^16.3.1",
     "@types/node": "^26.2.0",
