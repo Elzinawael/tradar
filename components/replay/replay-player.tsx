@@ -58,7 +58,12 @@ import {
   resetReplay,
 } from "@/lib/actions/replay"
 import { initialBacktestState } from "@/lib/actions/state"
-import { cn, formatCurrency } from "@/lib/utils"
+import {
+  cn,
+  formatCurrency,
+  formatMarketDate,
+  formatMarketDateTime,
+} from "@/lib/utils"
 import {
   MARKET_SESSIONS,
   SETUP_GRADES,
@@ -580,22 +585,22 @@ export function ReplayPlayer({
               This replay&apos;s market data is incomplete.
             </p>
             <p className="text-muted-foreground">
-              {coverage.actualBars.toLocaleString()} bars loaded
+              {coverage.actualBars.toLocaleString("en-US")} bars loaded
               {coverage.gaps.length > 0 &&
                 ` · ${coverage.gaps.length} interior gap${
                   coverage.gaps.length === 1 ? "" : "s"
                 } (largest ${Math.max(
                   ...coverage.gaps.map((g) => g.missingBars),
-                ).toLocaleString()} bars near ${new Date(
+                ).toLocaleString("en-US")} bars near ${formatMarketDate(
                   coverage.gaps[0].afterTs,
-                ).toLocaleDateString()})`}
+                )})`}
               {coverage.missingTail && " · data ends before the range end"}
               {coverage.missingHead && " · data starts after the range start"}
               {!coverage.missingHead &&
                 !coverage.missingTail &&
                 coverage.gaps.length === 0 &&
                 replay.datasetBars !== null &&
-                ` · the underlying candle data changed since this replay was created (was ${replay.datasetBars.toLocaleString()} bars)`}
+                ` · the underlying candle data changed since this replay was created (was ${replay.datasetBars.toLocaleString("en-US")} bars)`}
               . The replay steps over missing periods. Load the full range from{" "}
               <Link
                 href="/replay/data"
@@ -683,7 +688,7 @@ export function ReplayPlayer({
             <Badge variant="outline">{visible.length} bars shown</Badge>
             {current && (
               <span className="font-mono tabular-nums text-muted-foreground">
-                {new Date(current.ts).toLocaleString()} · {current.close}
+                {formatMarketDateTime(current.ts)} · {current.close}
               </span>
             )}
             {atEnd && (
